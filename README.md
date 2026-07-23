@@ -20,6 +20,8 @@ Or select one interactively:
 
     npx skills add mblode/tone-of-voice
 
+Requires Node.js 22.18 or newer, which runs the TypeScript sources directly. There are no runtime dependencies.
+
 ## Quick start
 
 ### 1. Train
@@ -59,20 +61,6 @@ Personal data lives outside this repository, under `~/.config/tone-of-voice` or 
     backups/
 
 Raw exports stay where they already are. The bundled scripts make no network requests and collect no telemetry, but Codex or Claude Code sends the content of a generation prompt to its model provider. The training skill shows that boundary before the first model-backed run.
-
-## Development
-
-    npm test     # type check and run the deterministic test suite
-
-Tests use stub agent executables and fictional fixtures. They never call a model or read `~/.config/tone-of-voice`.
-
-Validate the skills against the Agent Skills specification:
-
-    uvx --from skills-ref agentskills validate skills/tone-of-voice
-    uvx --from skills-ref agentskills validate skills/train-tone-of-voice
-    uvx --from skills-ref agentskills validate skills/evaluate-tone-of-voice
-
-Requires Node.js 22.18 or newer, which runs the TypeScript sources directly. TypeScript is a dev dependency for type checking only; there are no runtime dependencies.
 
 ## License
 
