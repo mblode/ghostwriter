@@ -1040,7 +1040,25 @@ async function runCommand<P extends { preview: object }>(
   return mode === 'execute' ? execute(plan) : { ...plan.preview, status: 'dry-run' };
 }
 
+function usage(): string {
+  return [
+    'Usage:',
+    '  node prepare-corpus.ts corpus --input <normalized.jsonl> [--home <dir>] [--seed <seed>] [--mode dry-run|execute] [--confirm-write]',
+    '  node prepare-corpus.ts profile --input <profile.md> --platform <slug> [--home <dir>] [--mode ...] [--confirm-write]',
+    '  node prepare-corpus.ts eval --cases <cases.jsonl> --references <references.jsonl> [--home <dir>] [--mode ...] [--confirm-write]',
+    '',
+    'Example:',
+    '  node prepare-corpus.ts corpus --input ./normalized.jsonl --seed v1 --mode dry-run',
+    '',
+    'Every command defaults to --mode dry-run; execute requires --confirm-write.',
+  ].join('\n');
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
   const options = parseArguments(argv);
   let result: object;
   if (options.command === 'corpus') {

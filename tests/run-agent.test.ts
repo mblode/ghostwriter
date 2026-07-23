@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   CASE_SCHEMA,
@@ -19,6 +21,9 @@ import {
   readConfinedModelInput,
   runAgent,
 } from '../skills/train-tone-of-voice/scripts/run-agent.ts';
+
+const RUN_AGENT = fileURLToPath(new URL('../skills/train-tone-of-voice/scripts/run-agent.ts', import.meta.url));
+const PREPARE_CORPUS = fileURLToPath(new URL('../skills/train-tone-of-voice/scripts/prepare-corpus.ts', import.meta.url));
 import type { CorpusRecord } from '../skills/train-tone-of-voice/scripts/prepare-corpus.ts';
 
 async function temporaryDirectory(): Promise<string> {
@@ -76,6 +81,17 @@ function corpusRecord(overrides: Partial<CorpusRecord> = {}): CorpusRecord {
     ...overrides,
   };
 }
+
+test('both training scripts answer --help and no args with usage on exit 0', () => {
+  for (const script of [RUN_AGENT, PREPARE_CORPUS]) {
+    for (const argv of [['--help'], []]) {
+      const result = spawnSync(process.execPath, [script, ...argv], { encoding: 'utf8' });
+      assert.equal(result.status, 0, `${script} ${argv.join(' ')}: ${result.stderr}`);
+      assert.match(result.stdout, /^Usage:/m);
+      assert.match(result.stdout, /Example:/);
+    }
+  }
+});
 
 test('Codex argv is explicit, isolated, read-only, and stdin-driven', () => {
   const args = buildCodexArgs({

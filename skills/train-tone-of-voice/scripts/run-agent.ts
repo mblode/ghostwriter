@@ -662,7 +662,24 @@ function parseArguments(argv: string[]): CliOptions {
   };
 }
 
+function usage(): string {
+  return [
+    'Usage:',
+    '  node run-agent.ts profile --platform <slug> [--runner codex|claude] [--model <model>] [--mode dry-run|execute] [--confirm-send]',
+    '  node run-agent.ts case --id <heldout-id> [--runner codex|claude] [--model <model>] [--mode ...] [--confirm-send]',
+    '',
+    'Example:',
+    '  node run-agent.ts profile --platform slack --runner codex --mode dry-run',
+    '',
+    'Defaults to --runner codex and --mode dry-run; execute requires --confirm-send.',
+  ].join('\n');
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
   const options = parseArguments(argv);
   const task = options.task === 'profile'
     ? await buildProfileTask(options)
