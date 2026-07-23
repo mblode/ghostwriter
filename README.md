@@ -1,16 +1,9 @@
 # Ghostwriter
 
-Draft messages that read as you wrote them, not as a model did.
+Draft messages that read as you wrote them, not as a model did. Three portable Agent Skills that run on an authenticated Codex or Claude Code CLI. No API keys, no service, no database. Your writing stays on your machine.
 
-- Built-in rules keep it from writing AI slop.
-- Personalise the `soul.md` so it sounds like you.
-- Train it on your Slack, email, or WhatsApp.
-- Eval the responses to see if it's working.
-
-Three portable Agent Skills that run on an authenticated Codex or Claude Code CLI. No API keys, no service, no database. Your writing stays on your machine.
-
-- [ghostwriter](./skills/ghostwriter/SKILL.md) drafts, rewrites, and reviews from a private per-platform profile, and strips the tells that mark prose as AI.
-- [train-ghostwriter](./skills/train-ghostwriter/SKILL.md) builds those profiles from your own writing.
+- [ghostwriter](./skills/ghostwriter/SKILL.md) drafts, rewrites, and reviews from a private per-platform profile you personalise, with built-in rules that strip the tells marking prose as AI.
+- [train-ghostwriter](./skills/train-ghostwriter/SKILL.md) builds those profiles from your own Slack, email, or WhatsApp.
 - [evaluate-ghostwriter](./skills/evaluate-ghostwriter/SKILL.md) runs blind comparisons so you can see if a profile helps.
 
 ## Quick start
