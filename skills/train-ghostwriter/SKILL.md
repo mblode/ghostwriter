@@ -17,6 +17,17 @@ Turn explicitly selected local writing into a private profile and uncontaminated
 | [references/corpus-contract.md](references/corpus-contract.md) | Always, before normalizing or validating samples. |
 | [assets/profile-template.md](assets/profile-template.md) | The runner reads this during profile generation; read it when reviewing profile output. |
 
+## Workflow
+
+Copy this checklist and track progress:
+
+- [ ] 1. Establish the data root, sources, and platforms; explain the provider boundary.
+- [ ] 2. Normalize samples into one JSONL staging file per the corpus contract.
+- [ ] 3. Prepare the corpus: dry-run, review the split, then execute.
+- [ ] 4. Generate and install one profile per platform through a clean session.
+- [ ] 5. Prepare held-out evaluation cases, one clean session per ID.
+- [ ] 6. Verify every script printed successful JSON with destinations, counts, and backups.
+
 ## 1. Establish the boundary
 
 Resolve the data root from non-empty `GHOSTWRITER_HOME`, otherwise use `~/.config/ghostwriter`. Ask for explicit source paths and a platform for each source. Do not search mailboxes, chats, home directories, or cloud services.
@@ -75,7 +86,7 @@ node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" profile \
   --mode execute --confirm-write
 ```
 
-The per-platform profiles produced here are complemented by a hand-authored `<home>/soul.md` holding the cross-platform voice core (openers, sign-off, spelling, fingerprint words, strategy leanings) that the runtime reads alongside each profile. This trainer does not generate `soul.md`; the user writes it, optionally with the agent's help. See `examples/soul.md` for the starting shape.
+The per-platform profiles produced here are complemented by a hand-authored `<home>/soul.md` holding the cross-platform voice core (openers, sign-off, spelling, fingerprint words, strategy leanings) that the runtime reads alongside each profile. This trainer does not generate `soul.md`; the user writes it, optionally with the agent's help. The `ghostwriter` skill owns and documents its shape.
 
 ## 5. Prepare held-out evaluation cases
 

@@ -313,7 +313,7 @@ export function renderReport(
 ): string {
   const summary = summarizeLabels(labels);
   const lines = [
-    "# Tone of voice evaluation report",
+    "# Ghostwriter evaluation report",
     "",
     `Run: ${runId || "unknown"}`,
     `Generated: ${generatedAt}`,

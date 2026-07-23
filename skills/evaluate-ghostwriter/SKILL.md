@@ -1,6 +1,6 @@
 ---
 name: evaluate-ghostwriter
-description: Runs blind, human-labeled baseline-versus-profile evaluations through a locally authenticated Codex or Claude Code CLI. Measures whether the exact ghostwriter skill and private platform profiles improve resemblance to held-out writing. Use when asked to "evaluate my tone", "test my voice profile", compare writing with and without a tone skill, review blind A/B candidates, or report tone evaluation results.
+description: Runs blind, human-labeled baseline-versus-profile evaluations through a locally authenticated Codex or Claude Code CLI. Measures whether the exact ghostwriter skill and private platform profiles improve resemblance to held-out writing. Use when asked to "evaluate my voice", "test my voice profile", compare writing with and without the ghostwriter skill, review blind A/B candidates, or report voice evaluation results. Use train-ghostwriter to create the profiles and held-out cases this measures.
 ---
 
 # Evaluate ghostwriter
@@ -13,6 +13,16 @@ Measure a fixed runtime skill and fixed private profiles against real held-out w
 The scripts execute the deterministic parts of this workflow. Do not reproduce their logic manually. `scripts/run-eval.ts` generates candidates without opening references. `scripts/review-eval.ts` joins references only after generation and records human choices. The scripts use [assets/candidate-output.schema.json](assets/candidate-output.schema.json) for structured runner output; do not edit it per run.
 
 Both branches of a pair get the same CLI, model, case bytes, and output contract in fresh non-persistent sessions. The treatment alone also receives the complete runtime `SKILL.md` and platform profile, encoded losslessly as JSON strings. Never summarize or selectively copy either file; `manifest.json` pins hashes of their original bytes.
+
+## Workflow
+
+Copy this checklist and work top to bottom; each item is a section below.
+
+- [ ] 1. Pin inputs and runner (cases, runtime skill, profiles dir, runs dir, runner, model)
+- [ ] 2. Preview the provider boundary and get confirmation
+- [ ] 3. Generate matched pairs with `run-eval.ts`
+- [ ] 4. Review blind with `review-eval.ts`, choosing `a`/`b`/`tie`/`invalid` per case
+- [ ] 5. Verify counts reconcile against `labels.jsonl` and preserve the immutable run
 
 ## 1. Pin inputs and runner
 
