@@ -10,9 +10,9 @@ Measure a fixed runtime skill and fixed private profiles against real held-out w
 - **IS:** clean candidate generation, deterministic blinding, human review, and descriptive reporting.
 - **IS NOT:** training profiles, modifying corpora, grading with another model, or exposing the treatment before a human choice. Use `train-tone-of-voice` to create profiles and held-out cases.
 
-Read [references/evaluation-method.md](references/evaluation-method.md) before every evaluation, to validate inputs, protect the blind, and interpret the report.
-
 The scripts execute the deterministic parts of this workflow. Do not reproduce their logic manually. `scripts/run-eval.ts` generates candidates without opening references. `scripts/review-eval.ts` joins references only after generation and records human choices. The scripts use [assets/candidate-output.schema.json](assets/candidate-output.schema.json) for structured runner output; do not edit it per run.
+
+Both branches of a pair get the same CLI, model, case bytes, and output contract in fresh non-persistent sessions. The treatment alone also receives the complete runtime `SKILL.md` and platform profile, encoded losslessly as JSON strings. Never summarize or selectively copy either file; `manifest.json` pins hashes of their original bytes.
 
 ## 1. Pin inputs and runner
 
@@ -69,7 +69,7 @@ node scripts/review-eval.ts \
   --references <tone-home>/evals/references.jsonl
 ```
 
-For each case, choose `a`, `b`, `tie`, or `invalid`. Judge which candidate sounds more like the real held-out response while preserving all required facts. Use `invalid` when the case, reference, or both candidates make a fair comparison impossible. Labels are saved after every choice, and the blind and reference file hashes are pinned when review begins.
+For each case, choose `a`, `b`, `tie`, or `invalid`. Judge which candidate sounds more like the real held-out response while preserving all required facts. Use `tie` when both are comparably close and factually valid, and `invalid` when the case, reference, or both candidates make a fair comparison impossible. Do not label on polish alone: a fluent candidate that alters a required fact loses. Labels are saved after every choice, and the blind and reference file hashes are pinned when review begins.
 
 For an externally completed blind review, provide a JSONL choices file through `--labels-file`. It must contain only `id` and `choice`.
 
@@ -82,18 +82,15 @@ Confirm:
 - Invalid labels are separate from valid win/tie rates.
 - The report contains raw observations only, with no automated quality claim.
 
-Keep the immutable run as evidence. Start a new run after changing any skill, profile, case, runner, or model.
+Keep the immutable run as evidence. Start a new run after changing any skill, profile, case, runner, or model. Inspect every treatment loss and invalid case and group recurring causes before changing anything.
 
 ## Gotchas
 
 - Never add `--references` to `run-eval.ts`; the option is intentionally unsupported so held-out answers cannot enter candidate prompts.
-- Never remove Codex's `--disable shell_tool`; a read-only sandbox blocks writes but still allows private file reads.
-- Never remove Codex's apps, multi-agent, image-generation, or web-search disables; each reintroduces an uncontrolled generation path.
-- Never remove Codex's `-c skills.include_instructions=false`; `--ignore-user-config` alone still exposes globally installed skill descriptions and can contaminate the baseline.
+- Never weaken Codex's flag set. `--disable shell_tool` matters because a read-only sandbox blocks writes but still allows private file reads; the apps, multi-agent, image-generation and web-search disables each close an uncontrolled generation path; and `-c skills.include_instructions=false` matters because `--ignore-user-config` alone still exposes globally installed skill descriptions and can contaminate the baseline.
 - Codex still registers `update_plan`, `request_user_input`, `apply_patch`, and `view_image`. Read-only mode blocks `apply_patch`; prompt rules prohibit all tools; local image-path rejection limits `view_image` reads.
-- Never review `manifest.json` before labeling; `blindMapping` identifies the treatment and breaks the blind.
+- Never open `manifest.json` before labeling, and never edit references, blind candidates, mappings, or stored labels after review begins. `blindMapping` identifies the treatment, and pinned hashes make an altered run fail closed.
 - Leave `--seed` unset for real reviews; the script creates a private random seed so the public assignment algorithm does not reveal A/B.
 - Never compare runs that changed both the profile and model; the result cannot isolate the profile's effect.
 - Never regenerate successful branches during resume; the script preserves them so retries do not silently change the pair.
-- Never edit references, blind candidates, mappings, or stored label metadata after review begins; pinned hashes and derived labels make the run fail closed.
-- Never treat a small win rate as proof. Read losses and invalid cases to find shared failure modes.
+- Never treat a small win rate as proof.

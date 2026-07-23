@@ -42,15 +42,4 @@ The deterministic split operates on `(platform, group)`, never individual messag
 
 Each represented platform needs at least two groups so one can remain in train and one in heldout. More varied groups produce a more credible profile than many messages from one conversation.
 
-## Normalization checks
-
-Before running the script:
-
-1. Confirm every selected file with the user.
-2. Map export-specific fields to the six fields above.
-3. Confirm the owner's identity only as needed to filter authored messages; do not store it in JSONL.
-4. Assign group IDs that reveal no recipient or conversation title.
-5. Inspect for obvious secrets and personal identifiers.
-6. Save UTF-8 JSONL to an explicit staging path.
-
-The script then checks syntax, exact fields, safe platform and context slugs, duplicate IDs, group counts, and split disjointness. Before model use, the runner also rejects absolute, home-relative, traversal-based, `file:` and Windows-drive image paths. Ordinary public image URLs remain valid text. Errors include the source line number where possible.
+Confirm the owner's identity only as far as you need it to filter authored messages, and never store it in the JSONL. Assign group IDs that reveal no recipient or conversation title.

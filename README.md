@@ -30,11 +30,7 @@ Requires Node.js 22.18 or newer, which runs the TypeScript sources directly. The
 
 The trainer previews files and record counts before sending anything to your chosen agent CLI. It normalizes your authored messages, splits whole conversations into training and held-out sets, derives a profile from training messages only, creates evaluation prompts separately from held-out reference responses, then validates and backs up files before installing the profile.
 
-The normalized format is JSONL:
-
-    {"id":"message-1","platform":"slack","context":"direct-message","group":"thread-7","text":"Thanks, I will take a look today.","timestamp":"2026-07-20T01:30:00Z"}
-
-The skill can transform local text, Markdown, CSV, JSON, or export files into this contract. It has no live service connectors.
+It works from local text, Markdown, CSV, JSON, or export files you name explicitly. There are no live service connectors.
 
 ### 2. Draft
 

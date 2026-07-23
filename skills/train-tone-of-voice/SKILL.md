@@ -15,7 +15,6 @@ Turn explicitly selected local writing into a private profile and uncontaminated
 | File | Read when |
 |---|---|
 | [references/corpus-contract.md](references/corpus-contract.md) | Always, before normalizing or validating samples. |
-| [references/training-method.md](references/training-method.md) | Always, before splitting, invoking a model, or replacing a profile. |
 | [assets/profile-template.md](assets/profile-template.md) | The runner reads this during profile generation; read it when reviewing profile output. |
 
 ## 1. Establish the boundary
@@ -53,7 +52,7 @@ node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" corpus \
 
 ## 4. Generate and install profiles
 
-Read [references/training-method.md](references/training-method.md). For each platform, preview the exact local files and provider boundary:
+For each platform, preview the exact local files and provider boundary:
 
 ```bash
 node "$TRAIN_TONE_SKILL_DIR/scripts/run-agent.ts" profile \
@@ -63,6 +62,8 @@ node "$TRAIN_TONE_SKILL_DIR/scripts/run-agent.ts" profile \
 After explicit confirmation, repeat with `--mode execute --confirm-send`. The command mechanically reads only `corpus/train.jsonl` and the bundled template. It has no option for a held-out input path.
 
 The preview records the capability policy. It must list the Codex residual capabilities above instead of claiming `tools: false`. All samples and templates are encoded into one JSON payload, followed by an explicit prohibition on tool calls and local-file reads.
+
+Review the generated profile against [assets/profile-template.md](assets/profile-template.md): it must separate evidence from uncertainty, keep excerpts short and redacted, and not turn a single typo or event into a rule. The stricter headings apply only to newly trained profiles; the runtime still accepts existing free-form ones.
 
 Write only `result.profile` from the command output to a temporary Markdown file. Validate and preview installation, then ask before replacement:
 
@@ -87,6 +88,8 @@ node "$TRAIN_TONE_SKILL_DIR/scripts/run-agent.ts" case \
 
 Append `result.case` to staging `cases.jsonl`. Append `result.reference` to a separate staging `references.jsonl`. Never place `reference` in a case. Fewer than ten cases is allowed but must be reported as low support.
 
+The scenario must make the writing task reproducible without revealing distinctive wording from the reference. Facts hold only what every candidate must preserve; constraints hold task requirements, never personal style rules.
+
 Validate and install the pair together:
 
 ```bash
@@ -100,13 +103,7 @@ node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" eval \
 
 ## 6. Verify
 
-Require successful JSON output from every script. Confirm:
-
-- `manifest.json` records the seed, source hash, algorithm, and per-platform counts.
-- No `(platform, group)` pair or ID occurs in both corpus files.
-- Profile generation lists `train.jsonl` and the template as the only files sent.
-- Every replaced file has a timestamped backup path in the execution result.
-- Case and reference ID sets match, while their content remains physically separate.
+Require successful JSON output from every script, and report the destinations, counts, and backup paths it prints. The disjoint split, the narrow profile input surface, the case/reference ID match, and the backups are all enforced by the scripts, which fail closed rather than warn.
 
 ## Gotchas
 
@@ -114,8 +111,7 @@ Require successful JSON output from every script. Confirm:
 - Never pass `heldout.jsonl` to the `profile` command. The command deliberately has no such flag.
 - Run the dry run every time. It is also the provider-transmission and destination check.
 - Ambiguous authorship contaminates the profile. Ask or exclude the message.
-- Do not use `claude --bare`; it bypasses subscription authentication. The adapter uses print mode, safe mode, no persistence, and no tools.
-- Do not accept a Claude result unless it is a successful result wrapper with `structured_output`. Error wrappers and unstructured result text fail closed.
+- Do not use `claude --bare`; it bypasses subscription authentication. The adapter uses print mode, safe mode, no persistence, and no tools, and its result must be a successful wrapper with `structured_output` or it fails closed.
 - Do not invoke either runner through a shell string. `run-agent.ts` uses argument arrays and standard input so sample text cannot become shell syntax.
 - Never remove Codex's `--disable shell_tool` or `-c skills.include_instructions=false`; read-only mode alone permits private reads and ambient skill descriptions can contaminate training.
 - Codex retains `update_plan`, `request_user_input`, `apply_patch`, and `view_image`. Do not claim all tools are disabled. Keep the post-data no-tool instruction and local image-path rejection.

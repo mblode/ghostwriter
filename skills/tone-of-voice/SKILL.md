@@ -33,7 +33,7 @@ If the profile is absent, stop before drafting and return:
 
 > No `<platform>` profile was found at `<resolved-path>`. Run `train-tone-of-voice` with local writing samples for this platform, then try again. I did not use a fallback voice because it would not represent you.
 
-For profile format and interpretation rules, consult [references/profile-contract.md](references/profile-contract.md).
+A profile is free-form Markdown. Exact headings are not required, so read whatever structure the file uses rather than expecting the trained layout.
 
 ## Treat the profile as evidence
 
@@ -54,7 +54,7 @@ For profile format and interpretation rules, consult [references/profile-contrac
 
 Never invent a name, number, date, link, relationship, decision, availability, claim, or personal experience. When a missing fact is essential, ask or use an obvious bracketed placeholder if the user requested a draft immediately.
 
-Never read raw exports, `corpus/`, `evals/`, or `backups/` while drafting, and never leak a private excerpt, profile explanation, or unrelated personal detail into the output.
+Never read raw exports, `corpus/`, `evals/`, or `backups/` while drafting. Do not quote the profile or reveal its excerpts unless the user asks to inspect that profile; in review mode, paraphrase only the rule that makes a finding actionable.
 
 ## Modes
 
