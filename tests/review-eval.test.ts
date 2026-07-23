@@ -138,11 +138,11 @@ test("persists each label and resumes an interrupted review", async () => {
 });
 
 test("report arithmetic includes every outcome and sorts platforms", () => {
-  const labels: Pick<Label, "id" | "platform" | "outcome">[] = [
-    { id: "1", platform: "slack", outcome: "treatment-win" },
-    { id: "2", platform: "email", outcome: "baseline-win" },
-    { id: "3", platform: "slack", outcome: "tie" },
-    { id: "4", platform: "email", outcome: "invalid" },
+  const labels: Pick<Label, "id" | "platform" | "choice" | "outcome">[] = [
+    { id: "1", platform: "slack", choice: "a", outcome: "treatment-win" },
+    { id: "2", platform: "email", choice: "b", outcome: "baseline-win" },
+    { id: "3", platform: "slack", choice: "tie", outcome: "tie" },
+    { id: "4", platform: "email", choice: "invalid", outcome: "invalid" },
   ];
   const report = renderReport(labels, { runId: "fixed", generatedAt: "2026-01-01T00:00:00.000Z" });
   assert.match(report, /\| Treatment win \| 1 \| 33\.3% \|/);
@@ -150,6 +150,53 @@ test("report arithmetic includes every outcome and sorts platforms", () => {
   assert.match(report, /\| Tie \| 1 \| 33\.3% \|/);
   assert.match(report, /\| Invalid \| 1 \| 25\.0% \|/);
   assert.ok(report.indexOf("| email |") < report.indexOf("| slack |"));
+});
+
+test("reports a Wilson interval and position counts that reconcile with labels", () => {
+  const labels: Pick<Label, "id" | "platform" | "choice" | "outcome">[] = [
+    { id: "1", platform: "slack", choice: "a", outcome: "treatment-win" },
+    { id: "2", platform: "email", choice: "b", outcome: "baseline-win" },
+  ];
+  const report = renderReport(labels, { runId: "wilson", generatedAt: "2026-01-01T00:00:00.000Z" });
+  // 1 treatment win over 2 valid labels: the 95% Wilson score interval is
+  // [0.0945, 0.9055] to one decimal place.
+  assert.match(
+    report,
+    /Treatment win rate 95% Wilson score interval, over 2 valid labels \(wins and ties, invalid excluded\): 9\.5% to 90\.5%\./,
+  );
+  // Position counts are the raw a/b choices, one each here.
+  assert.match(report, /Position choices before blind mapping: a chosen 1, b chosen 1\./);
+
+  const bounds = report.match(/interval[^:]*: ([\d.]+)% to ([\d.]+)%/);
+  assert.ok(bounds, "interval line should expose numeric bounds");
+  const lower = Number.parseFloat(bounds![1]);
+  const upper = Number.parseFloat(bounds![2]);
+  assert.ok(lower >= 0 && lower <= 100, "lower bound within [0,100]");
+  assert.ok(upper >= 0 && upper <= 100, "upper bound within [0,100]");
+  assert.ok(lower <= upper, "lower bound not above upper bound");
+});
+
+test("Wilson upper bound clamps to 100% when every valid label is a win", () => {
+  const labels: Pick<Label, "id" | "platform" | "choice" | "outcome">[] = [
+    { id: "1", platform: "slack", choice: "a", outcome: "treatment-win" },
+    { id: "2", platform: "slack", choice: "a", outcome: "treatment-win" },
+    { id: "3", platform: "slack", choice: "a", outcome: "treatment-win" },
+  ];
+  const report = renderReport(labels, { runId: "wilson-clamp", generatedAt: "2026-01-01T00:00:00.000Z" });
+  const bounds = report.match(/interval[^:]*: ([\d.]+)% to ([\d.]+)%/);
+  assert.ok(bounds, "interval line should expose numeric bounds");
+  assert.equal(bounds![2], "100.0");
+  assert.ok(Number.parseFloat(bounds![1]) >= 0);
+  assert.match(report, /a chosen 3, b chosen 0/);
+});
+
+test("Wilson interval reports n/a and no position choices when nothing is valid", () => {
+  const labels: Pick<Label, "id" | "platform" | "choice" | "outcome">[] = [
+    { id: "1", platform: "slack", choice: "invalid", outcome: "invalid" },
+  ];
+  const report = renderReport(labels, { runId: "wilson-empty", generatedAt: "2026-01-01T00:00:00.000Z" });
+  assert.match(report, /Treatment win rate 95% Wilson score interval: n\/a \(no valid labels\)\./);
+  assert.match(report, /a chosen 0, b chosen 0/);
 });
 
 test("platform summaries handle names inherited by ordinary objects", () => {

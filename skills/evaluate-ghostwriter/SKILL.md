@@ -14,6 +14,8 @@ The scripts execute the deterministic parts of this workflow. Do not reproduce t
 
 Both branches of a pair get the same CLI, model, case bytes, and output contract in fresh non-persistent sessions. The treatment alone also receives the complete runtime `SKILL.md` and platform profile, encoded losslessly as JSON strings. Never summarize or selectively copy either file; `manifest.json` pins hashes of their original bytes.
 
+This measures the whole ghostwriter skill (anti-AI-prose pass plus strategy layer) and profile bundle against a raw-model baseline with no style guidance. A treatment win cannot be attributed to the profile alone, since it does not isolate the profile's own marginal effect.
+
 ## Workflow
 
 Copy this checklist and work top to bottom; each item is a section below.

@@ -61,6 +61,8 @@ node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" corpus \
   --mode execute --confirm-write
 ```
 
+The split defaults to the seeded hash strategy. Pass `--split temporal` to hold out the most recent groups instead (a drift-aware eval that scores the profile against the latest writing); it requires a `timestamp` on every record. The command also fails closed when the same normalized message text lands in both a train and a held-out group, so deduplicate boilerplate before splitting. See [references/corpus-contract.md](references/corpus-contract.md) for both.
+
 ## 4. Generate and install profiles
 
 For each platform, preview the exact local files and provider boundary:
@@ -86,6 +88,8 @@ node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" profile \
   --mode execute --confirm-write
 ```
 
+The profile dry-run reports `trainGroups` and `trainMessages` for the platform and emits a low-support warning (fewer than 3 training groups or fewer than 10 messages) when the evidence is too thin to profile without overfitting. This warns, it does not block: the disjoint split already needs two groups. Treat the warning as a prompt to collect more independent conversations, the same way you treat fewer than ten held-out cases.
+
 The per-platform profiles produced here are complemented by a hand-authored `<home>/soul.md` holding the cross-platform voice core (openers, sign-off, spelling, fingerprint words, strategy leanings) that the runtime reads alongside each profile. This trainer does not generate `soul.md`; the user writes it, optionally with the agent's help. The `ghostwriter` skill owns and documents its shape.
 
 ## 5. Prepare held-out evaluation cases
@@ -103,6 +107,8 @@ Append `result.case` to staging `cases.jsonl`. Append `result.reference` to a se
 
 The scenario must make the writing task reproducible without revealing distinctive wording from the reference. Facts hold only what every candidate must preserve; constraints hold task requirements, never personal style rules.
 
+The `eval` command fails closed when a case's scenario, facts, or constraints leak the reference wording: it rejects any verbatim run of eight or more normalized words shared with the reference, or a case that reproduces 60% or more of the reference's word trigrams. A leaky case makes the blind evaluation non-blind, so reword the scenario and keep facts to neutral content rather than quoted phrasing.
+
 Validate and install the pair together:
 
 ```bash
@@ -116,7 +122,7 @@ node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" eval \
 
 ## 6. Verify
 
-Require successful JSON output from every script, and report the destinations, counts, and backup paths it prints. The disjoint split, the narrow profile input surface, the case/reference ID match, and the backups are all enforced by the scripts, which fail closed rather than warn.
+Require successful JSON output from every script, and report the destinations, counts, and backup paths it prints. The disjoint split, the cross-split duplicate guard, the narrow profile input surface, the case/reference ID match, the case/reference leakage guard, and the backups are all enforced by the scripts, which fail closed rather than warn. Surface any low-support warnings (thin profiles, fewer than ten held-out cases) to the user without treating them as blockers.
 
 ## Gotchas
 
@@ -132,3 +138,6 @@ Require successful JSON output from every script, and report the destinations, c
 - Do not install generated Markdown directly. The `profile` command validates headings, obvious personal identifiers, held-out copying, confinement, backup, and atomic replacement.
 - Do not treat fewer than ten held-out cases as proof. Report observations and collect more independent writing.
 - Never merge cases and references into one file. The physical split is what keeps real answers away from candidate generation.
+- A case that quotes or closely paraphrases its reference is rejected by the leakage guard. Rewrite the scenario in neutral terms and keep facts to required content, not the reference's phrasing.
+- Duplicate or boilerplate messages pasted into different groups can still cross the split. The corpus command fails closed on this; deduplicate or regroup rather than forcing the split.
+- `--split temporal` needs a timestamp on every record and holds out the most recent groups. Use it for a drift-aware eval; keep the default hash split when timestamps are missing or you want a time-independent result.

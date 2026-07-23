@@ -7,10 +7,12 @@ import test from 'node:test';
 import {
   TransactionError,
   assertDisjoint,
+  assertNoCrossSplitDuplicates,
   buildCorpusPlan,
   buildEvalPlan,
   buildProfilePlan,
   confinedPath,
+  detectCaseReferenceLeakage,
   executeCorpusPlan,
   executeEvalPlan,
   executeProfilePlan,
@@ -20,6 +22,7 @@ import {
   validateCase,
   validateProfile,
   writeAtomically,
+  type CaseRecord,
   type CorpusRecord,
 } from '../skills/train-ghostwriter/scripts/prepare-corpus.ts';
 
@@ -419,4 +422,162 @@ test('eval transaction never leaves mixed cases and references after a commit fa
     readFile(originalPlan.destinations.cases, 'utf8'),
     readFile(originalPlan.destinations.references, 'utf8'),
   ]), before);
+});
+
+function caseRecord(overrides: Partial<CaseRecord> = {}): CaseRecord {
+  return {
+    id: 'slack-5',
+    platform: 'slack',
+    context: 'group-chat',
+    scenario: 'Share that a paper model is available for review.',
+    facts: ['The paper model is ready'],
+    constraints: ['Ask for comments'],
+    ...overrides,
+  };
+}
+
+test('leakage guard passes a clean case and flags one that echoes the reference', () => {
+  const reference = 'Small update: the paper model is ready for comments.';
+
+  // The bundled valid fixture restates required content without copying wording.
+  assert.equal(detectCaseReferenceLeakage(caseRecord(), reference), null);
+
+  // A scenario that copies the reference verbatim is a verbatim-run leak.
+  assert.match(
+    detectCaseReferenceLeakage(
+      caseRecord({ scenario: reference }),
+      reference,
+    ) ?? '',
+    /verbatim run of at least 8 words/,
+  );
+
+  // Content that covers most of the reference but breaks it into runs shorter than
+  // eight words still trips the trigram overlap signal.
+  const paraphraseReference = 'The migration finished overnight and every dashboard is green again today.';
+  assert.match(
+    detectCaseReferenceLeakage(
+      caseRecord({
+        scenario: 'Every dashboard is green again today.',
+        facts: ['The migration finished overnight'],
+        constraints: [],
+      }),
+      paraphraseReference,
+    ) ?? '',
+    /reference word trigrams/,
+  );
+});
+
+test('leakage guard rejects a leaky eval case through buildEvalPlan', async () => {
+  const root = await temporaryDirectory();
+  const home = join(root, 'private');
+  const cases = join(root, 'cases.jsonl');
+  const references = join(root, 'references.jsonl');
+  await writeEvalHeldout(home);
+
+  const leakyText = 'Small update: the paper model is ready for comments.';
+  await writeFile(cases, serializeJsonl([{
+    id: 'slack-5',
+    platform: 'slack',
+    context: 'group-chat',
+    scenario: leakyText,
+    facts: ['The paper model is ready'],
+    constraints: [],
+  }]));
+  await writeFile(references, serializeJsonl([{ id: 'slack-5', reference: leakyText }]));
+
+  await assert.rejects(
+    buildEvalPlan({ cases, references, home }),
+    /case "slack-5" leaks reference wording/,
+  );
+});
+
+test('profile plan warns on low-support training evidence but not above the floor', async () => {
+  const root = await temporaryDirectory();
+  const home = join(root, 'private');
+  const input = join(root, 'profile.md');
+  await mkdir(join(home, 'corpus'), { recursive: true });
+  await writeFile(input, await fixture('profile-valid.md'));
+
+  // Two groups, two messages: below both floors, so a warning must surface.
+  await writeFile(join(home, 'corpus', 'train.jsonl'), serializeJsonl([
+    validRecord({ id: 'slack-a', group: 'thread-a', text: 'A fictional first message.' }),
+    validRecord({ id: 'slack-b', group: 'thread-b', text: 'A fictional second message.' }),
+  ]));
+  const thin = await buildProfilePlan({ input, platform: 'slack', home });
+  assert.equal(thin.preview.trainGroups, 2);
+  assert.equal(thin.preview.trainMessages, 2);
+  assert.equal(thin.preview.warnings.length, 1);
+  assert.match(thin.preview.warnings[0], /Low support/);
+
+  // Three groups and ten messages: at or above both floors, so no warning.
+  const ampleRecords = Array.from({ length: 10 }, (_unused, index) =>
+    validRecord({
+      id: `slack-ample-${index}`,
+      group: `thread-${index % 3}`,
+      text: `A fictional ample message number ${index}.`,
+    }));
+  await writeFile(join(home, 'corpus', 'train.jsonl'), serializeJsonl(ampleRecords));
+  const ample = await buildProfilePlan({ input, platform: 'slack', home });
+  assert.equal(ample.preview.trainGroups, 3);
+  assert.equal(ample.preview.trainMessages, 10);
+  assert.equal(ample.preview.warnings.length, 0);
+});
+
+test('cross-split dedup rejects the same message text on both sides of a split', () => {
+  const duplicated = 'The quarterly numbers are attached below for your review, thank you.';
+  const records = [
+    validRecord({ id: 'dup-1', group: 'thread-a', text: duplicated }),
+    validRecord({ id: 'dup-2', group: 'thread-b', text: duplicated }),
+  ] as unknown as CorpusRecord[];
+
+  // A two-group platform always splits one group per side, so the duplicate crosses.
+  assert.throws(
+    () => splitByGroup(records, 'fixed-seed'),
+    /near-identical message text appears in train id .* and held-out id/,
+  );
+
+  // The same guard called directly, with punctuation and casing differences only.
+  assert.throws(
+    () => assertNoCrossSplitDuplicates(
+      [validRecord({ id: 'a', text: 'The quarterly numbers are attached below.' }) as unknown as CorpusRecord],
+      [validRecord({ id: 'b', text: 'THE QUARTERLY   numbers, are attached below!' }) as unknown as CorpusRecord],
+    ),
+    /near-identical message text/,
+  );
+
+  // Distinct texts on each side pass.
+  assert.doesNotThrow(() => assertNoCrossSplitDuplicates(
+    [validRecord({ id: 'a', text: 'The quarterly numbers are attached below.' }) as unknown as CorpusRecord],
+    [validRecord({ id: 'b', text: 'A completely different held-out message body.' }) as unknown as CorpusRecord],
+  ));
+});
+
+test('temporal split holds out the most recent groups and stays deterministic', () => {
+  const records = [
+    validRecord({ id: 't-1', group: 'thread-old', text: 'Oldest thread message.', timestamp: '2026-01-01T00:00:00Z' }),
+    validRecord({ id: 't-2', group: 'thread-mid', text: 'Middle thread message.', timestamp: '2026-03-01T00:00:00Z' }),
+    validRecord({ id: 't-3', group: 'thread-new', text: 'Newest thread message.', timestamp: '2026-06-01T00:00:00Z' }),
+  ] as unknown as CorpusRecord[];
+
+  const first = splitByGroup(records, 'ignored-seed', { strategy: 'temporal' });
+  const second = splitByGroup(records, 'ignored-seed', { strategy: 'temporal' });
+  assert.deepEqual(first, second);
+
+  assert.deepEqual(first.heldout.map((record) => record.group), ['thread-new']);
+  assert.deepEqual(first.train.map((record) => record.group).sort(), ['thread-mid', 'thread-old']);
+
+  // Temporal ordering must not depend on the seed, unlike the hash strategy.
+  const hashSplit = splitByGroup(records, 'ignored-seed');
+  assert.equal(first.platforms.slack.heldoutGroups, 1);
+  assert.equal(hashSplit.heldout.length >= 1, true);
+
+  // Missing timestamps cannot be ordered temporally, so the guard fails closed.
+  const noTimestamps = [
+    validRecord({ id: 'n-1', group: 'thread-a', text: 'First message without a time.' }),
+    validRecord({ id: 'n-2', group: 'thread-b', text: 'Second message without a time.' }),
+  ] as unknown as CorpusRecord[];
+  assert.throws(
+    () => splitByGroup(noTimestamps, 'seed', { strategy: 'temporal' }),
+    /temporal split requires every record to carry a timestamp/,
+  );
 });

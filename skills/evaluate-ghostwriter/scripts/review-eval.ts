@@ -307,8 +307,28 @@ function percentage(count: number, denominator: number): string {
   return denominator === 0 ? "n/a" : `${((count / denominator) * 100).toFixed(1)}%`;
 }
 
+// z = 1.96 is the standard normal critical value for a two-sided 95% interval
+// (the 97.5th percentile). Hardcoded because the report only ever quotes 95%;
+// no other confidence level is offered.
+const WILSON_Z = 1.96;
+
+// Wilson score interval for a binomial proportion. Preferred over the normal
+// approximation because it stays sensible at the small samples these reviews
+// produce. Returns null when there is nothing to bound.
+function wilsonInterval(successes: number, n: number): { lower: number; upper: number } | null {
+  if (n <= 0) return null;
+  const p = successes / n;
+  const z2 = WILSON_Z * WILSON_Z;
+  const denominator = 1 + z2 / n;
+  const center = (p + z2 / (2 * n)) / denominator;
+  const margin = (WILSON_Z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / denominator;
+  // Clamp to [0, 1]: the interval is already contained there in exact math, but
+  // floating point can nudge a bound a hair past the edge.
+  return { lower: Math.max(0, center - margin), upper: Math.min(1, center + margin) };
+}
+
 export function renderReport(
-  labels: Pick<Label, "id" | "platform" | "outcome">[],
+  labels: Pick<Label, "id" | "platform" | "choice" | "outcome">[],
   { runId, generatedAt = new Date().toISOString() }: { runId?: string; generatedAt?: string } = {},
 ): string {
   const summary = summarizeLabels(labels);
@@ -350,7 +370,30 @@ export function renderReport(
       `${bucket.reviewed} |`,
     ].join(" | "));
   }
-  lines.push("", "No automated judge was used. Inspect invalid cases and losses before changing the skill or profile.", "");
+  const valid = summary.overall.valid;
+  const interval = wilsonInterval(summary.overall["treatment-win"], valid);
+  let positionA = 0;
+  let positionB = 0;
+  for (const label of labels) {
+    if (label.choice === "a") positionA += 1;
+    else if (label.choice === "b") positionB += 1;
+  }
+  lines.push(
+    "",
+    "## Uncertainty and position diagnostic",
+    "",
+    interval
+      ? `Treatment win rate 95% Wilson score interval, over ${valid} valid labels (wins and ties, invalid excluded): ${(interval.lower * 100).toFixed(1)}% to ${(interval.upper * 100).toFixed(1)}%.`
+      : "Treatment win rate 95% Wilson score interval: n/a (no valid labels).",
+    "These bounds describe uncertainty in the human labels, not an automated quality judgment; a small win rate is still not proof.",
+    `Position choices before blind mapping: a chosen ${positionA}, b chosen ${positionB}. A lopsided split points to position bias rather than a voice difference.`,
+  );
+  lines.push(
+    "",
+    "No automated judge was used. Inspect invalid cases and losses before changing the skill or profile.",
+    "This measures the whole ghostwriter skill (anti-AI-prose pass plus strategy layer) and profile bundle against a raw-model baseline with no style guidance; it does not isolate the profile's own marginal effect.",
+    "",
+  );
   return lines.join("\n");
 }
 

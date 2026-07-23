@@ -85,6 +85,36 @@ const MAX_TEXT_CHARACTERS = 20_000;
 const MAX_PROFILE_BYTES = 128 * 1024;
 const MAX_EXCERPT_CHARACTERS = 280;
 const HELDOUT_FRACTION = 0.2;
+
+// A message whose normalized text lands in both a train group and a held-out
+// group defeats the split: the model memorizes text that later scores as a
+// "blind" reference. Sign-offs like "thanks" recur harmlessly, so only flag
+// substantial duplicates, matching the 20-character floor the profile check uses
+// for held-out copying.
+const CROSS_SPLIT_MIN_CHARACTERS = 20;
+
+// A verbatim run of this many normalized words reproduced from the reference is a
+// copied clause, not the incidental content overlap legitimate facts carry (the
+// bundled fixtures preserve at most a five-word factual run). Eight words cannot
+// recur by chance between two independently written short messages.
+const LEAKAGE_MIN_RUN_WORDS = 8;
+
+// Fraction of the reference's distinct word trigrams that also appear in the
+// case. A blind case must restate required content, so some overlap is expected;
+// three fifths means the case has reproduced most of the reference's phrasing and
+// the evaluation is no longer blind. The valid fixtures sit at or below 0.43.
+const LEAKAGE_TRIGRAM_OVERLAP = 0.6;
+const LEAKAGE_TRIGRAM_SIZE = 3;
+
+const SPLIT_STRATEGIES = ['hash', 'temporal'] as const;
+export type SplitStrategy = (typeof SPLIT_STRATEGIES)[number];
+
+// A profile built from very few independent conversations overfits: it turns one
+// thread's quirks into "rules". The 2-group hard floor only guarantees a disjoint
+// split, not a representative profile, so warn (never block) below these. Three
+// groups and ten messages mirror the low-support scale used for held-out cases.
+const PROFILE_LOW_SUPPORT_GROUPS = 3;
+const PROFILE_LOW_SUPPORT_MESSAGES = 10;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -288,6 +318,47 @@ function groupKey(record: CorpusRecord): string {
   return `${record.platform}\0${record.group}`;
 }
 
+// Case-fold, drop punctuation, and collapse whitespace so that "near-identical"
+// text differing only in casing, punctuation, or spacing compares equal. Used by
+// both the cross-split dedup pass and the case/reference leakage guard.
+function normalizeWords(text: string): string[] {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+}
+
+function wordNgrams(tokens: string[], size: number): string[] {
+  const grams: string[] = [];
+  for (let index = 0; index + size <= tokens.length; index += 1) {
+    grams.push(tokens.slice(index, index + size).join(' '));
+  }
+  return grams;
+}
+
+export function assertNoCrossSplitDuplicates(train: CorpusRecord[], heldout: CorpusRecord[]): void {
+  const trainByNormalized = new Map<string, CorpusRecord>();
+  for (const record of train) {
+    const normalized = normalizeWords(record.text).join(' ');
+    if (normalized.length >= CROSS_SPLIT_MIN_CHARACTERS && !trainByNormalized.has(normalized)) {
+      trainByNormalized.set(normalized, record);
+    }
+  }
+  for (const record of heldout) {
+    const normalized = normalizeWords(record.text).join(' ');
+    if (normalized.length < CROSS_SPLIT_MIN_CHARACTERS) continue;
+    const trainMatch = trainByNormalized.get(normalized);
+    if (trainMatch) {
+      throw new UserInputError(
+        `split invariant failed: near-identical message text appears in train id ${JSON.stringify(trainMatch.id)} and held-out id ${JSON.stringify(record.id)}; deduplicate or regroup before splitting`,
+      );
+    }
+  }
+}
+
 export function assertDisjoint(train: CorpusRecord[], heldout: CorpusRecord[]): void {
   const trainIds = new Set(train.map((record) => record.id));
   const trainGroups = new Set(train.map(groupKey));
@@ -320,7 +391,45 @@ export interface SplitResult {
   platforms: Record<string, PlatformCounts>;
 }
 
-export function splitByGroup(records: CorpusRecord[], seed: string): SplitResult {
+// Order a platform's groups so the first `heldoutCount` become the held-out set.
+// The hash strategy is seeded and stable; the temporal strategy puts the most
+// recent groups first (drift-aware eval), keyed on each group's latest timestamp
+// and tie-broken by group name so it stays deterministic.
+function orderGroups(
+  strategy: SplitStrategy,
+  seed: string,
+  platform: string,
+  groups: string[],
+  platformRecords: CorpusRecord[],
+): string[] {
+  if (strategy === 'temporal') {
+    const latest = new Map<string, number>();
+    for (const record of platformRecords) {
+      if (record.timestamp === undefined) {
+        throw new UserInputError(
+          `temporal split requires every record to carry a timestamp; platform ${JSON.stringify(platform)} record ${JSON.stringify(record.id)} has none`,
+        );
+      }
+      const time = Date.parse(record.timestamp);
+      const current = latest.get(record.group);
+      if (current === undefined || time > current) latest.set(record.group, time);
+    }
+    return [...groups].sort((left, right) => {
+      const byRecency = latest.get(right)! - latest.get(left)!;
+      return byRecency || left.localeCompare(right);
+    });
+  }
+  return [...groups].sort((left, right) => {
+    const byHash = splitHash(seed, platform, left).localeCompare(splitHash(seed, platform, right));
+    return byHash || left.localeCompare(right);
+  });
+}
+
+export function splitByGroup(
+  records: CorpusRecord[],
+  seed: string,
+  { strategy = 'hash' }: { strategy?: SplitStrategy } = {},
+): SplitResult {
   if (seed.trim() === '') throw new UserInputError('seed must be a non-empty string');
 
   const platformGroups = new Map<string, Set<string>>();
@@ -340,26 +449,23 @@ export function splitByGroup(records: CorpusRecord[], seed: string): SplitResult
       );
     }
 
-    groups.sort((left, right) => {
-      const byHash = splitHash(seed, platform, left).localeCompare(splitHash(seed, platform, right));
-      return byHash || left.localeCompare(right);
-    });
+    const platformRecords = records.filter((record) => record.platform === platform);
+    const ordered = orderGroups(strategy, seed, platform, groups, platformRecords);
 
     // Twenty percent is conventional holdout coverage. Clamping preserves at least
     // one independent group for both profile derivation and evaluation.
     const heldoutCount = Math.min(
-      groups.length - 1,
-      Math.max(1, Math.round(groups.length * HELDOUT_FRACTION)),
+      ordered.length - 1,
+      Math.max(1, Math.round(ordered.length * HELDOUT_FRACTION)),
     );
-    for (const group of groups.slice(0, heldoutCount)) {
+    for (const group of ordered.slice(0, heldoutCount)) {
       heldoutGroups.add(`${platform}\0${group}`);
     }
 
-    const platformRecords = records.filter((record) => record.platform === platform);
     platforms[platform] = {
       records: platformRecords.length,
-      groups: groups.length,
-      trainGroups: groups.length - heldoutCount,
+      groups: ordered.length,
+      trainGroups: ordered.length - heldoutCount,
       heldoutGroups: heldoutCount,
       contexts: [...new Set(platformRecords.map((record) => record.context))].sort(),
     };
@@ -368,6 +474,7 @@ export function splitByGroup(records: CorpusRecord[], seed: string): SplitResult
   const train = records.filter((record) => !heldoutGroups.has(groupKey(record)));
   const heldout = records.filter((record) => heldoutGroups.has(groupKey(record)));
   assertDisjoint(train, heldout);
+  assertNoCrossSplitDuplicates(train, heldout);
 
   for (const [platform, counts] of Object.entries(platforms)) {
     counts.trainRecords = train.filter((record) => record.platform === platform).length;
@@ -634,6 +741,7 @@ export interface CorpusPreview {
   source: { path: string; sha256: string; records: number };
   destinations: { train: string; heldout: string; manifest: string };
   split: {
+    strategy: SplitStrategy;
     algorithm: string;
     trainRecords: number;
     heldoutRecords: number;
@@ -652,15 +760,25 @@ export interface CorpusPlan {
   preview: CorpusPreview;
 }
 
+function resolveSplitStrategy(value: string | undefined): SplitStrategy {
+  if (value === undefined) return 'hash';
+  if (!isOneOf(SPLIT_STRATEGIES, value)) {
+    throw new UserInputError('--split must be hash or temporal');
+  }
+  return value;
+}
+
 export async function buildCorpusPlan(
-  { input, home, seed = 'v1' }: { input?: string; home?: string; seed?: string },
+  { input, home, seed = 'v1', split: splitArg }:
+    { input?: string; home?: string; seed?: string; split?: string },
 ): Promise<CorpusPlan> {
   if (!input) throw new UserInputError('corpus requires --input');
+  const strategy = resolveSplitStrategy(splitArg);
   const sourcePath = resolve(input);
   const dataHome = resolveDataHome(home);
   const content = await readLimited(sourcePath);
   const records = parseJsonl(content, { source: sourcePath });
-  const split = splitByGroup(records, seed);
+  const split = splitByGroup(records, seed, { strategy });
   const trainText = serializeJsonl(split.train);
   const heldoutText = serializeJsonl(split.heldout);
   const destinations = {
@@ -681,7 +799,10 @@ export async function buildCorpusPlan(
       source: { path: sourcePath, sha256: sha256(content), records: records.length },
       destinations,
       split: {
-        algorithm: 'sha256(seed\\0platform\\0group), 20% rounded and clamped to retain one group on each side',
+        strategy,
+        algorithm: strategy === 'temporal'
+          ? 'timestamp-ordered, most-recent 20% of groups held out, rounded and clamped to retain one group on each side'
+          : 'sha256(seed\\0platform\\0group), 20% rounded and clamped to retain one group on each side',
         trainRecords: split.train.length,
         heldoutRecords: split.heldout.length,
         platforms: split.platforms,
@@ -779,7 +900,10 @@ export interface ProfilePlan {
     source: { path: string; sha256: string };
     destination: string;
     heldoutRecordsChecked: number;
+    trainGroups: number;
+    trainMessages: number;
     requiredHeadings: readonly string[];
+    warnings: string[];
   };
 }
 
@@ -797,6 +921,27 @@ export async function buildProfilePlan(
       .filter((record) => record.platform === platform)
     : [];
   validateProfile(markdown, { source: sourcePath, heldout });
+
+  // Surface a low-support warning from the training evidence this profile is
+  // derived from, analogous to the held-out case warning. Warn, never block: the
+  // 2-group hard floor is enforced earlier by splitByGroup.
+  const trainPath = confinedPath(dataHome, 'corpus', 'train.jsonl');
+  const trainRecords = (await pathExists(trainPath))
+    ? parseJsonl(await readLimited(trainPath), { source: trainPath })
+      .filter((record) => record.platform === platform)
+    : [];
+  const trainGroups = new Set(trainRecords.map((record) => record.group)).size;
+  const trainMessages = trainRecords.length;
+  const warnings: string[] = [];
+  if (
+    trainRecords.length > 0
+    && (trainGroups < PROFILE_LOW_SUPPORT_GROUPS || trainMessages < PROFILE_LOW_SUPPORT_MESSAGES)
+  ) {
+    warnings.push(
+      `Low support: platform ${JSON.stringify(platform)} has ${trainGroups} training group(s) and ${trainMessages} message(s) in corpus/train.jsonl (below ${PROFILE_LOW_SUPPORT_GROUPS} groups or ${PROFILE_LOW_SUPPORT_MESSAGES} messages). The profile may overfit; collect more independent conversations.`,
+    );
+  }
+
   const destination = confinedPath(dataHome, `${platform}.md`);
   return {
     home: dataHome,
@@ -808,7 +953,10 @@ export async function buildProfilePlan(
       source: { path: sourcePath, sha256: sha256(markdown) },
       destination,
       heldoutRecordsChecked: heldout.length,
+      trainGroups,
+      trainMessages,
       requiredHeadings: REQUIRED_PROFILE_HEADINGS,
+      warnings,
     },
   };
 }
@@ -891,6 +1039,38 @@ export interface EvalPlan {
   };
 }
 
+// Reject a case whose scenario, facts, or constraints embed the reference wording.
+// The reference equals its held-out text, so any distinctive phrasing that survives
+// into the case makes the "blind" evaluation non-blind. Returns a reason string on
+// clear leakage, otherwise null. Fails on either a long verbatim word run or a high
+// trigram-overlap fraction, so both copy-paste and light paraphrase are caught.
+export function detectCaseReferenceLeakage(caseRecord: CaseRecord, reference: string): string | null {
+  const caseTokens = normalizeWords(
+    [caseRecord.scenario, ...caseRecord.facts, ...caseRecord.constraints].join(' '),
+  );
+  const referenceTokens = normalizeWords(reference);
+  if (referenceTokens.length === 0) return null;
+
+  if (referenceTokens.length >= LEAKAGE_MIN_RUN_WORDS) {
+    const referenceRuns = new Set(wordNgrams(referenceTokens, LEAKAGE_MIN_RUN_WORDS));
+    if (wordNgrams(caseTokens, LEAKAGE_MIN_RUN_WORDS).some((run) => referenceRuns.has(run))) {
+      return `reproduces a verbatim run of at least ${LEAKAGE_MIN_RUN_WORDS} words from the reference`;
+    }
+  }
+
+  const referenceTrigrams = new Set(wordNgrams(referenceTokens, LEAKAGE_TRIGRAM_SIZE));
+  if (referenceTrigrams.size > 0) {
+    const caseTrigrams = new Set(wordNgrams(caseTokens, LEAKAGE_TRIGRAM_SIZE));
+    let shared = 0;
+    for (const trigram of referenceTrigrams) if (caseTrigrams.has(trigram)) shared += 1;
+    const overlap = shared / referenceTrigrams.size;
+    if (overlap >= LEAKAGE_TRIGRAM_OVERLAP) {
+      return `shares ${Math.round(overlap * 100)}% of the reference word trigrams`;
+    }
+  }
+  return null;
+}
+
 export async function buildEvalPlan(
   { cases, references, home }: { cases?: string; references?: string; home?: string },
 ): Promise<EvalPlan> {
@@ -936,6 +1116,12 @@ export async function buildEvalPlan(
         `reference ${JSON.stringify(caseRecord.id)} does not exactly match corpus/heldout.jsonl`,
       );
     }
+    const leak = detectCaseReferenceLeakage(caseRecord, heldoutRecord.text);
+    if (leak) {
+      throw new UserInputError(
+        `case ${JSON.stringify(caseRecord.id)} leaks reference wording (${leak}); a blind evaluation requires the scenario, facts, and constraints to avoid the reference wording`,
+      );
+    }
   }
 
   const caseText = serializeJsonl(caseRecords);
@@ -977,6 +1163,7 @@ interface CliOptions {
   input?: string;
   home?: string;
   seed?: string;
+  split?: string;
   platform?: string;
   cases?: string;
   references?: string;
@@ -997,7 +1184,7 @@ function parseArguments(argv: string[]): CliOptions {
   const values: Record<string, string> = {};
   let confirmWrite = false;
   const valueFlags = new Set([
-    '--input', '--home', '--seed', '--mode', '--platform', '--cases', '--references',
+    '--input', '--home', '--seed', '--split', '--mode', '--platform', '--cases', '--references',
   ]);
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
@@ -1026,6 +1213,7 @@ function parseArguments(argv: string[]): CliOptions {
     input: values.input,
     home: values.home,
     seed: values.seed,
+    split: values.split,
     platform: values.platform,
     cases: values.cases,
     references: values.references,
@@ -1043,7 +1231,7 @@ async function runCommand<P extends { preview: object }>(
 function usage(): string {
   return [
     'Usage:',
-    '  node prepare-corpus.ts corpus --input <normalized.jsonl> [--home <dir>] [--seed <seed>] [--mode dry-run|execute] [--confirm-write]',
+    '  node prepare-corpus.ts corpus --input <normalized.jsonl> [--home <dir>] [--seed <seed>] [--split hash|temporal] [--mode dry-run|execute] [--confirm-write]',
     '  node prepare-corpus.ts profile --input <profile.md> --platform <slug> [--home <dir>] [--mode ...] [--confirm-write]',
     '  node prepare-corpus.ts eval --cases <cases.jsonl> --references <references.jsonl> [--home <dir>] [--mode ...] [--confirm-write]',
     '',
