@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 const REPOSITORY_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SKILLS_ROOT = join(REPOSITORY_ROOT, "skills");
 const EXPECTED_SKILLS = [
-  "tone-of-voice",
-  "train-tone-of-voice",
-  "evaluate-tone-of-voice",
+  "ghostwriter",
+  "train-ghostwriter",
+  "evaluate-ghostwriter",
 ];
 
 const SKIPPED_DIRECTORIES = new Set([".git", "node_modules"]);

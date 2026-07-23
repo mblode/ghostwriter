@@ -17,7 +17,7 @@ import {
   type CandidateRecord,
   type EvalCase,
   type EvaluationOptions,
-} from "../skills/evaluate-tone-of-voice/scripts/run-eval.ts";
+} from "../skills/evaluate-ghostwriter/scripts/run-eval.ts";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(TEST_DIR, "fixtures/evaluation");

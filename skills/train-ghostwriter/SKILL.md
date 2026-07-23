@@ -1,14 +1,14 @@
 ---
-name: train-tone-of-voice
-description: Trains private, platform-specific tone profiles from local writing samples with deterministic held-out splits, clean Codex or Claude Code sessions, previews, backups, and atomic writes. Use when asked to "learn my tone", "build my voice profile", "train a writing style", import writing samples, refresh a tone profile, or prepare tone-of-voice evaluation cases.
+name: train-ghostwriter
+description: Trains private, platform-specific tone profiles from local writing samples with deterministic held-out splits, clean Codex or Claude Code sessions, previews, backups, and atomic writes. Use when asked to "learn my tone", "build my voice profile", "train a writing style", import writing samples, refresh a tone profile, or prepare ghostwriter evaluation cases.
 ---
 
-# Train Tone of Voice
+# Train Ghostwriter
 
 Turn explicitly selected local writing into a private profile and uncontaminated evaluation set.
 
-- **IS:** the only tone-of-voice workflow that creates corpus files, profiles, cases, or references.
-- **IS NOT:** a live connector, scraper, drafting skill, evaluator, continuous learner, or hosted data service. Use `tone-of-voice` to draft and `evaluate-tone-of-voice` to evaluate.
+- **IS:** the only ghostwriter workflow that creates corpus files, profiles, cases, or references.
+- **IS NOT:** a live connector, scraper, drafting skill, evaluator, continuous learner, or hosted data service. Use `ghostwriter` to draft and `evaluate-ghostwriter` to evaluate.
 
 ## Reference files
 
@@ -19,9 +19,9 @@ Turn explicitly selected local writing into a private profile and uncontaminated
 
 ## 1. Establish the boundary
 
-Resolve the data root from non-empty `TONE_OF_VOICE_HOME`, otherwise use `~/.config/tone-of-voice`. Ask for explicit source paths and a platform for each source. Do not search mailboxes, chats, home directories, or cloud services.
+Resolve the data root from non-empty `GHOSTWRITER_HOME`, otherwise use `~/.config/ghostwriter`. Ask for explicit source paths and a platform for each source. Do not search mailboxes, chats, home directories, or cloud services.
 
-Resolve the absolute directory containing this `SKILL.md` once as the task-specific shell variable `TRAIN_TONE_SKILL_DIR`. Invoke bundled scripts through that directory so the workflow works from an individual skill install or a repository checkout.
+Resolve the absolute directory containing this `SKILL.md` once as the task-specific shell variable `TRAIN_GHOSTWRITER_DIR`. Invoke bundled scripts through that directory so the workflow works from an individual skill install or a repository checkout.
 
 Explain before model use: source files remain on disk, but the writing included in a generation prompt is sent by the selected local CLI to its model provider. The repository adds no telemetry or network client.
 
@@ -38,14 +38,14 @@ The agent interprets exports; do not invent a connector or parser framework. Ask
 Execute the deterministic script, do not reproduce its validation or split logic:
 
 ```bash
-node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" corpus \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" corpus \
   --input /explicit/path/normalized.jsonl --seed v1 --mode dry-run
 ```
 
 Show the preview and stop on every validation error. After the user confirms the destinations and split counts, execute:
 
 ```bash
-node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" corpus \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" corpus \
   --input /explicit/path/normalized.jsonl --seed v1 \
   --mode execute --confirm-write
 ```
@@ -55,7 +55,7 @@ node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" corpus \
 For each platform, preview the exact local files and provider boundary:
 
 ```bash
-node "$TRAIN_TONE_SKILL_DIR/scripts/run-agent.ts" profile \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/run-agent.ts" profile \
   --platform slack --runner codex --mode dry-run
 ```
 
@@ -68,23 +68,23 @@ Review the generated profile against [assets/profile-template.md](assets/profile
 Write only `result.profile` from the command output to a temporary Markdown file. Validate and preview installation, then ask before replacement:
 
 ```bash
-node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" profile \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" profile \
   --input /path/to/generated-profile.md --platform slack --mode dry-run
-node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" profile \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" profile \
   --input /path/to/generated-profile.md --platform slack \
   --mode execute --confirm-write
 ```
 
-The per-platform profiles produced here are complemented by a hand-authored `<tone-home>/soul.md` holding the cross-platform voice core (openers, sign-off, spelling, fingerprint words, strategy leanings) that the runtime reads alongside each profile. This trainer does not generate `soul.md`; the user writes it, optionally with the agent's help. See `examples/soul.md` for the starting shape.
+The per-platform profiles produced here are complemented by a hand-authored `<home>/soul.md` holding the cross-platform voice core (openers, sign-off, spelling, fingerprint words, strategy leanings) that the runtime reads alongside each profile. This trainer does not generate `soul.md`; the user writes it, optionally with the agent's help. See `examples/soul.md` for the starting shape.
 
 ## 5. Prepare held-out evaluation cases
 
 List IDs in `corpus/heldout.jsonl`. Run one clean case-generation session per selected ID, previewing once before the first provider call:
 
 ```bash
-node "$TRAIN_TONE_SKILL_DIR/scripts/run-agent.ts" case \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/run-agent.ts" case \
   --id fictional-slack-8 --runner claude --mode dry-run
-node "$TRAIN_TONE_SKILL_DIR/scripts/run-agent.ts" case \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/run-agent.ts" case \
   --id fictional-slack-8 --runner claude --mode execute --confirm-send
 ```
 
@@ -95,10 +95,10 @@ The scenario must make the writing task reproducible without revealing distincti
 Validate and install the pair together:
 
 ```bash
-node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" eval \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" eval \
   --cases /path/to/cases.jsonl --references /path/to/references.jsonl \
   --mode dry-run
-node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" eval \
+node "$TRAIN_GHOSTWRITER_DIR/scripts/prepare-corpus.ts" eval \
   --cases /path/to/cases.jsonl --references /path/to/references.jsonl \
   --mode execute --confirm-write
 ```

@@ -386,7 +386,7 @@ export function sha256(content: string): string {
 }
 
 export function resolveDataHome(explicitHome?: string): string {
-  const candidate = explicitHome || process.env.TONE_OF_VOICE_HOME || join(homedir(), '.config', 'tone-of-voice');
+  const candidate = explicitHome || process.env.GHOSTWRITER_HOME || join(homedir(), '.config', 'ghostwriter');
   return resolve(candidate);
 }
 
@@ -395,7 +395,7 @@ export function confinedPath(home: string, ...parts: string[]): string {
   const target = resolve(root, ...parts);
   const fromRoot = relative(root, target);
   if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
-    throw new UserInputError(`refusing path outside TONE_OF_VOICE_HOME: ${target}`);
+    throw new UserInputError(`refusing path outside GHOSTWRITER_HOME: ${target}`);
   }
   return target;
 }

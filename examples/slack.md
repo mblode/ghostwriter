@@ -1,6 +1,6 @@
 # Slack profile (example)
 
-Fictional platform profile for the demo persona "Sam". Everything below is invented, not real messages. Copy this file to `<TONE_OF_VOICE_HOME>/slack.md` and replace the rules and excerpts with your own, or build it with `train-tone-of-voice`. The runtime reads it with `soul.md`; it never reads this repository copy.
+Fictional platform profile for the demo persona "Sam". Everything below is invented, not real messages. Copy this file to `<GHOSTWRITER_HOME>/slack.md` and replace the rules and excerpts with your own, or build it with `train-ghostwriter`. The runtime reads it with `soul.md`; it never reads this repository copy.
 
 This file holds only what is Slack-specific. Cross-platform habits (openers, spelling, the laugh token, strategy leanings) live in `soul.md`.
 

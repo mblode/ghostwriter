@@ -1,14 +1,14 @@
 ---
-name: tone-of-voice
-description: Drafts, rewrites, or reviews the user's personal messages, emails, posts, and tickets from a private per-platform profile plus a shared soul.md, strips the machine tells that make prose read as AI, and applies a communication-strategy layer to high-stakes messages. Use when asked to "write this in my voice", "draft a Slack message", "reply to this email as me", "write a LinkedIn post", "make this sound like me", "ghostwrite this", "critique my draft", or "will this land". Requires TONE_OF_VOICE_HOME or ~/.config/tone-of-voice with <platform>.md profiles and an optional soul.md; if no profile exists, route setup to train-tone-of-voice. For marketing or brand copy use copywriting; for long-form articles use blog-post; to measure a profile use evaluate-tone-of-voice.
+name: ghostwriter
+description: Drafts, rewrites, or reviews the user's personal messages, emails, posts, and tickets from a private per-platform profile plus a shared soul.md, strips the machine tells that make prose read as AI, and applies a communication-strategy layer to high-stakes messages. Use when asked to "write this in my voice", "draft a Slack message", "reply to this email as me", "write a LinkedIn post", "make this sound like me", "ghostwrite this", "critique my draft", or "will this land". Requires GHOSTWRITER_HOME or ~/.config/ghostwriter with <platform>.md profiles and an optional soul.md; if no profile exists, route setup to train-ghostwriter. For marketing or brand copy use copywriting; for long-form articles use blog-post; to measure a profile use evaluate-ghostwriter.
 ---
 
-# Tone of Voice
+# Ghostwriter
 
 Write outgoing messages that read as the user wrote them, not as a model did. Two layers, applied together: the private **profile** and **soul.md** make it sound like the user; this skill strips the machine tells no human types and, on request, makes a high-stakes message land. Voice wins every conflict: a tell-free draft that stops sounding like the user has failed.
 
 - **IS:** read-only drafting, rewriting, and reviewing of the user's personal communication, from their private soul and platform profile, with a universal anti-AI-prose pass and an optional strategy layer.
-- **IS NOT:** a trainer (`train-tone-of-voice`), evaluator (`evaluate-tone-of-voice`), brand copywriter (`copywriting`), or long-form essayist (`blog-post`). It never invents or hardcodes a persona; the voice lives entirely in the private profile and soul.md.
+- **IS NOT:** a trainer (`train-ghostwriter`), evaluator (`evaluate-ghostwriter`), brand copywriter (`copywriting`), or long-form essayist (`blog-post`). It never invents or hardcodes a persona; the voice lives entirely in the private profile and soul.md.
 
 **Default for every draft: shorter, simpler, more natural.** When two phrasings both fit, take the one with fewer words, plainer vocabulary, and a more human cadence, over any pull toward completeness or polish. A draft that already reads as tight usually isn't; try halving it, then return the shortest version that keeps every fact, link, and the intent.
 
@@ -24,12 +24,12 @@ Infer an input only when it is unambiguous. Ask one concise question when the pl
 ## Resolve the profile and soul
 
 1. Trim and lowercase the requested platform without replacing characters. Reject the raw value if it contains a dot, slash, or backslash, then require `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Do not sanitize an unsafe value into a different valid slug.
-2. Resolve the data root from a non-empty `TONE_OF_VOICE_HOME`, otherwise `~/.config/tone-of-voice`.
+2. Resolve the data root from a non-empty `GHOSTWRITER_HOME`, otherwise `~/.config/ghostwriter`.
 3. Read `<data-root>/soul.md` if it exists (the cross-platform core), then `<data-root>/<platform>.md` (required). Read only these. Never read another platform's profile, and never fall back to the repository's `examples/`.
 
 If the platform profile is absent, stop before drafting and return:
 
-> No `<platform>` profile was found at `<resolved-path>`. Run `train-tone-of-voice` with local writing samples for this platform, then try again. I did not use a fallback voice because it would not represent you.
+> No `<platform>` profile was found at `<resolved-path>`. Run `train-ghostwriter` with local writing samples for this platform, then try again. I did not use a fallback voice because it would not represent you.
 
 `soul.md` is optional; if it is missing, apply the platform profile and the anti-AI-prose pass alone.
 

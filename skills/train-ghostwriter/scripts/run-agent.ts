@@ -374,7 +374,7 @@ export async function runAgent({
   assertRunner(runner);
   if (prompt.trim() === '') throw new UserInputError('prompt must be a non-empty string');
 
-  const runDirectory = await mkdtemp(join(tmpdir(), 'tone-of-voice-run-'));
+  const runDirectory = await mkdtemp(join(tmpdir(), 'ghostwriter-run-'));
   const schemaPath = join(runDirectory, 'schema.json');
   const outputPath = join(runDirectory, 'last-message.json');
   await writeFile(schemaPath, `${JSON.stringify(schema, null, 2)}\n`, { mode: 0o600 });

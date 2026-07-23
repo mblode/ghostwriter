@@ -1,14 +1,14 @@
 ---
-name: evaluate-tone-of-voice
-description: Runs blind, human-labeled baseline-versus-profile evaluations through a locally authenticated Codex or Claude Code CLI. Measures whether the exact tone-of-voice skill and private platform profiles improve resemblance to held-out writing. Use when asked to "evaluate my tone", "test my voice profile", compare writing with and without a tone skill, review blind A/B candidates, or report tone evaluation results.
+name: evaluate-ghostwriter
+description: Runs blind, human-labeled baseline-versus-profile evaluations through a locally authenticated Codex or Claude Code CLI. Measures whether the exact ghostwriter skill and private platform profiles improve resemblance to held-out writing. Use when asked to "evaluate my tone", "test my voice profile", compare writing with and without a tone skill, review blind A/B candidates, or report tone evaluation results.
 ---
 
-# Evaluate tone of voice
+# Evaluate ghostwriter
 
 Measure a fixed runtime skill and fixed private profiles against real held-out writing.
 
 - **IS:** clean candidate generation, deterministic blinding, human review, and descriptive reporting.
-- **IS NOT:** training profiles, modifying corpora, grading with another model, or exposing the treatment before a human choice. Use `train-tone-of-voice` to create profiles and held-out cases.
+- **IS NOT:** training profiles, modifying corpora, grading with another model, or exposing the treatment before a human choice. Use `train-ghostwriter` to create profiles and held-out cases.
 
 The scripts execute the deterministic parts of this workflow. Do not reproduce their logic manually. `scripts/run-eval.ts` generates candidates without opening references. `scripts/review-eval.ts` joins references only after generation and records human choices. The scripts use [assets/candidate-output.schema.json](assets/candidate-output.schema.json) for structured runner output; do not edit it per run.
 
@@ -19,7 +19,7 @@ Both branches of a pair get the same CLI, model, case bytes, and output contract
 Resolve these paths explicitly:
 
 - `evals/cases.jsonl`, containing no held-out responses
-- the exact installed `tone-of-voice/SKILL.md`
+- the exact installed `ghostwriter/SKILL.md`
 - the private profile directory
 - `soul.md` in the profiles dir (optional, cross-platform voice core), sent with the treatment when present and hashed into the manifest as `soulHash`
 - `evals/runs`
@@ -48,15 +48,15 @@ Run from this skill directory:
 
 ```bash
 node scripts/run-eval.ts \
-  --cases <tone-home>/evals/cases.jsonl \
-  --runtime-skill <installed-tone-of-voice>/SKILL.md \
-  --profiles-dir <tone-home> \
-  --runs-dir <tone-home>/evals/runs \
+  --cases <home>/evals/cases.jsonl \
+  --runtime-skill <installed-ghostwriter>/SKILL.md \
+  --profiles-dir <home> \
+  --runs-dir <home>/evals/runs \
   --runner codex \
   --model <model>
 ```
 
-Use `--runner claude` for Claude Code. The user may set `TONE_OF_VOICE_HOME`; otherwise `<tone-home>` is `~/.config/tone-of-voice`.
+Use `--runner claude` for Claude Code. The user may set `GHOSTWRITER_HOME`; otherwise `<home>` is `~/.config/ghostwriter`.
 
 The command prints the new run directory. On failure, preserve that directory and rerun the same command with its `--run-id` plus `--resume`. Resume is rejected if inputs, runner policy, or stored candidate metadata changed.
 
@@ -67,7 +67,7 @@ Do not open `manifest.json` or `candidates.jsonl` before choices are complete. T
 ```bash
 node scripts/review-eval.ts \
   --run-dir <run-directory> \
-  --references <tone-home>/evals/references.jsonl
+  --references <home>/evals/references.jsonl
 ```
 
 For each case, choose `a`, `b`, `tie`, or `invalid`. Judge which candidate sounds more like the real held-out response while preserving all required facts. Use `tie` when both are comparably close and factually valid, and `invalid` when the case, reference, or both candidates make a fair comparison impossible. Do not label on polish alone: a fluent candidate that alters a required fact loses. Labels are saved after every choice, and the blind and reference file hashes are pinned when review begins.

@@ -21,13 +21,13 @@ import {
   validateProfile,
   writeAtomically,
   type CorpusRecord,
-} from '../skills/train-tone-of-voice/scripts/prepare-corpus.ts';
+} from '../skills/train-ghostwriter/scripts/prepare-corpus.ts';
 
 const fixtures = new URL('./fixtures/training/', import.meta.url);
-const prepareScript = new URL('../skills/train-tone-of-voice/scripts/prepare-corpus.ts', import.meta.url);
+const prepareScript = new URL('../skills/train-ghostwriter/scripts/prepare-corpus.ts', import.meta.url);
 
 async function temporaryDirectory(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'tone-of-voice-test-'));
+  return mkdtemp(join(tmpdir(), 'ghostwriter-test-'));
 }
 
 async function fixture(name: string): Promise<string> {
@@ -241,7 +241,7 @@ test('confined writes reject lexical and physical path escapes', async () => {
   const root = await temporaryDirectory();
   const home = join(root, 'private');
   await mkdir(home);
-  assert.throws(() => confinedPath(home, '..', 'escape.jsonl'), /outside TONE_OF_VOICE_HOME/);
+  assert.throws(() => confinedPath(home, '..', 'escape.jsonl'), /outside GHOSTWRITER_HOME/);
 
   const outside = join(root, 'outside');
   await mkdir(outside);

@@ -20,11 +20,11 @@ import {
   parseJsonOutput,
   readConfinedModelInput,
   runAgent,
-} from '../skills/train-tone-of-voice/scripts/run-agent.ts';
+} from '../skills/train-ghostwriter/scripts/run-agent.ts';
 
-const RUN_AGENT = fileURLToPath(new URL('../skills/train-tone-of-voice/scripts/run-agent.ts', import.meta.url));
-const PREPARE_CORPUS = fileURLToPath(new URL('../skills/train-tone-of-voice/scripts/prepare-corpus.ts', import.meta.url));
-import type { CorpusRecord } from '../skills/train-tone-of-voice/scripts/prepare-corpus.ts';
+const RUN_AGENT = fileURLToPath(new URL('../skills/train-ghostwriter/scripts/run-agent.ts', import.meta.url));
+const PREPARE_CORPUS = fileURLToPath(new URL('../skills/train-ghostwriter/scripts/prepare-corpus.ts', import.meta.url));
+import type { CorpusRecord } from '../skills/train-ghostwriter/scripts/prepare-corpus.ts';
 
 async function temporaryDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'tone-runner-test-'));

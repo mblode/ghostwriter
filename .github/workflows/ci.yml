@@ -33,9 +33,9 @@ jobs:
 
       - name: Validate skills
         run: |
-          agentskills validate skills/tone-of-voice
-          agentskills validate skills/train-tone-of-voice
-          agentskills validate skills/evaluate-tone-of-voice
+          agentskills validate skills/ghostwriter
+          agentskills validate skills/train-ghostwriter
+          agentskills validate skills/evaluate-ghostwriter
 
       - name: Test
         run: npm test

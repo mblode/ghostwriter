@@ -1,6 +1,6 @@
 # Soul (example)
 
-Fictional cross-platform core for a demo persona, "Sam", a Melbourne-based engineer and indie builder. Everything below is invented. Copy this file to `<TONE_OF_VOICE_HOME>/soul.md` (default `~/.config/tone-of-voice/soul.md`) and replace it with your own, or let `train-tone-of-voice` help you draft it from real writing. The runtime reads it alongside the platform profile; it never reads this repository copy.
+Fictional cross-platform core for a demo persona, "Sam", a Melbourne-based engineer and indie builder. Everything below is invented. Copy this file to `<GHOSTWRITER_HOME>/soul.md` (default `~/.config/ghostwriter/soul.md`) and replace it with your own, or let `train-ghostwriter` help you draft it from real writing. The runtime reads it alongside the platform profile; it never reads this repository copy.
 
 The soul holds what is constant across every platform. Platform-specific register, length, and excerpts live in the per-platform profiles.
 

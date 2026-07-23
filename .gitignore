@@ -3,7 +3,7 @@ node_modules/
 coverage/
 .env
 .env.*
-/.tone-of-voice/
+/.ghostwriter/
 /data/
 /profiles/
 /corpus/

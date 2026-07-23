@@ -12,7 +12,7 @@ import {
   summarizeLabels,
   type BlindRow,
   type Label,
-} from "../skills/evaluate-tone-of-voice/scripts/review-eval.ts";
+} from "../skills/evaluate-ghostwriter/scripts/review-eval.ts";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(TEST_DIR, "fixtures/evaluation");

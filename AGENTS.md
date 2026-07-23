@@ -17,15 +17,15 @@ Three independently installable Agent Skills. Keep the repository local-first, d
 - Keep deterministic data work in scripts and language judgment in the invoking agent.
 - Use plan, validate, execute for profile replacement and other multi-file writes.
 - Keep tone rules in private profiles. Runtime instructions must not hard-code one person's stylistic habits.
-- Persistent user data belongs under TONE_OF_VOICE_HOME, never inside an installed skill.
+- Persistent user data belongs under GHOSTWRITER_HOME, never inside an installed skill.
 
 ## Verification
 
 Before declaring a change complete:
 
     npm test
-    uvx --from skills-ref agentskills validate skills/tone-of-voice
-    uvx --from skills-ref agentskills validate skills/train-tone-of-voice
-    uvx --from skills-ref agentskills validate skills/evaluate-tone-of-voice
+    uvx --from skills-ref agentskills validate skills/ghostwriter
+    uvx --from skills-ref agentskills validate skills/train-ghostwriter
+    uvx --from skills-ref agentskills validate skills/evaluate-ghostwriter
 
 Model-backed smoke tests are opt-in. CI and ordinary unit tests must use fictional fixtures and stub executables.
