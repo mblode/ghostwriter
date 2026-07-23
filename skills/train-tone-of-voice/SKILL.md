@@ -75,6 +75,8 @@ node "$TRAIN_TONE_SKILL_DIR/scripts/prepare-corpus.ts" profile \
   --mode execute --confirm-write
 ```
 
+The per-platform profiles produced here are complemented by a hand-authored `<tone-home>/soul.md` holding the cross-platform voice core (openers, sign-off, spelling, fingerprint words, strategy leanings) that the runtime reads alongside each profile. This trainer does not generate `soul.md`; the user writes it, optionally with the agent's help. See `examples/soul.md` for the starting shape.
+
 ## 5. Prepare held-out evaluation cases
 
 List IDs in `corpus/heldout.jsonl`. Run one clean case-generation session per selected ID, previewing once before the first provider call:

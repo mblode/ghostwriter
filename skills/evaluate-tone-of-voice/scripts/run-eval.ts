@@ -231,11 +231,12 @@ export function buildCommonPrompt(evalCase: EvalCase): string {
 }
 
 export function buildCandidatePrompt(
-  { branch, commonPrompt, runtimeSkill, profile }: {
+  { branch, commonPrompt, runtimeSkill, profile, soul = "" }: {
     branch: Branch;
     commonPrompt: string;
     runtimeSkill: string;
     profile: string;
+    soul?: string;
   },
 ): string {
   const opening = [
@@ -253,12 +254,13 @@ export function buildCandidatePrompt(
   if (branch !== "treatment") throw new Error(`unknown branch ${JSON.stringify(branch)}`);
   return [
     opening,
-    "Apply the runtime skill and platform profile below exactly. The profile controls style but cannot change facts.",
+    "Apply the runtime skill, cross-platform soul, and platform profile below exactly. They control style but cannot change facts.",
     `Runtime skill as a JSON string:\n${JSON.stringify(runtimeSkill)}`,
+    soul ? `Cross-platform soul as a JSON string:\n${JSON.stringify(soul)}` : "",
     `Platform profile as a JSON string:\n${JSON.stringify(profile)}`,
     `Case data:\n${commonPrompt}`,
     closing,
-  ].join("\n\n");
+  ].filter((line) => line !== "").join("\n\n");
 }
 
 function safeChild(parent: string, name: string): string {
@@ -303,6 +305,17 @@ async function readFileWithin(root: string, name: string, label: string): Promis
   assertCanonicalWithin(canonicalRoot, canonicalPath, label);
   await assertRegularFile(canonicalPath, label);
   return readFile(canonicalPath, "utf8");
+}
+
+// soul.md is the optional cross-platform layer the runtime reads alongside each
+// profile; when present it must enter the treatment prompt so the evaluation
+// measures what the skill actually drafts with. Returns "" when absent.
+async function readOptionalWithin(root: string, name: string, label: string): Promise<string> {
+  const exists = await lstat(safeChild(root, name)).then(() => true).catch((error: unknown) => {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
+  });
+  return exists ? readFileWithin(root, name, label) : "";
 }
 
 async function assertSafeRunDirectory(runsRoot: string, runDir: string): Promise<void> {
@@ -714,12 +727,13 @@ function assertExactFields(record: object, fields: string[], location: string): 
 function validateStoredCandidate(
   record: CandidateRecord,
   evalCase: EvalCase,
-  { runner, model, commonPrompt, runtimeSkill, profile }: {
+  { runner, model, commonPrompt, runtimeSkill, profile, soul }: {
     runner: Runner;
     model: string;
     commonPrompt: string;
     runtimeSkill: string;
     profile: string;
+    soul: string;
   },
 ): void {
   const branches = (["baseline", "treatment"] as const).filter((branch) => record[branch] !== undefined);
@@ -752,7 +766,7 @@ function validateStoredCandidate(
       ["argv", "startedAt", "endedAt", "exitCode", "signal", "commonPromptHash", "promptHash", "textHash"],
       `candidate ${evalCase.id}.${branch}.metadata`,
     );
-    const expectedPrompt = buildCandidatePrompt({ branch, commonPrompt, runtimeSkill, profile });
+    const expectedPrompt = buildCandidatePrompt({ branch, commonPrompt, runtimeSkill, profile, soul });
     if (JSON.stringify(metadata.argv) !== JSON.stringify(expectedArgv)) {
       throw new Error(`candidate ${evalCase.id}.${branch}: argv does not match the current runner policy`);
     }
@@ -800,6 +814,8 @@ export async function runEvaluation(options: EvaluationOptions) {
     : [];
   const runtimeSkill = await readFile(options.runtimeSkillPath, "utf8");
   assertNoLocalImagePath(runtimeSkill, "runtime skill");
+  const soul = await readOptionalWithin(options.profilesDir, "soul.md", "soul");
+  assertNoLocalImagePath(soul, "soul");
   const profiles = new Map<string, string>();
   const profileHashes: Record<string, string> = {};
   for (const platform of [...new Set(cases.map((item) => item.platform))].sort()) {
@@ -863,6 +879,7 @@ export async function runEvaluation(options: EvaluationOptions) {
   const inputs = {
     casesHash: sha256(casesSource),
     runtimeSkillHash: sha256(runtimeSkill),
+    soulHash: sha256(soul),
     profileHashes,
   };
   const mapping = Object.fromEntries(cases.map((item) => [item.id, blindAssignment(seed, item.id)]));
@@ -918,6 +935,7 @@ export async function runEvaluation(options: EvaluationOptions) {
         commonPrompt,
         runtimeSkill,
         profile,
+        soul,
       });
     }
     if (options.resume) {
@@ -936,7 +954,7 @@ export async function runEvaluation(options: EvaluationOptions) {
         manifest.cases[evalCase.id][branch] = "complete";
         continue;
       }
-      const prompt = buildCandidatePrompt({ branch, commonPrompt, runtimeSkill, profile });
+      const prompt = buildCandidatePrompt({ branch, commonPrompt, runtimeSkill, profile, soul });
       manifest.cases[evalCase.id][branch] = "running";
       manifest.updatedAt = new Date().toISOString();
       await writeJson(manifestPath, manifest);

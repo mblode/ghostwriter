@@ -212,6 +212,25 @@ test("generates matched baseline and treatment pairs without reference access", 
   }
 });
 
+test("soul reaches treatment prompts but never the baseline", { concurrency: false }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "tone-eval-soul-"));
+  try {
+    await withStubEnvironment(root, async () => {
+      const binary = await makeStub(root, "codex");
+      await runEvaluation(options(root, binary));
+      const calls = await readStubCalls();
+      const treatments = calls.filter((call) => call.treatment);
+      const baselines = calls.filter((call) => !call.treatment);
+      assert.ok(treatments.length > 0);
+      assert.ok(baselines.length > 0);
+      assert.ok(treatments.every((call) => call.input.includes("SOUL_MARKER")));
+      assert.ok(baselines.every((call) => !call.input.includes("SOUL_MARKER")));
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("resume preserves successful candidates after a failed branch", { concurrency: false }, async () => {
   const root = await mkdtemp(join(tmpdir(), "tone-eval-resume-"));
   try {

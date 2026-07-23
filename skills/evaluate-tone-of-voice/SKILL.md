@@ -21,6 +21,7 @@ Resolve these paths explicitly:
 - `evals/cases.jsonl`, containing no held-out responses
 - the exact installed `tone-of-voice/SKILL.md`
 - the private profile directory
+- `soul.md` in the profiles dir (optional, cross-platform voice core), sent with the treatment when present and hashed into the manifest as `soulHash`
 - `evals/runs`
 - one runner (`codex` or `claude`) and an explicit model
 
@@ -35,7 +36,7 @@ Existing profiles with unknown training provenance are useful for drafting, but 
 Tell the user exactly what will happen before the first model call:
 
 - Cases, facts, and constraints are sent to the selected model provider twice.
-- The treatment also sends the exact runtime skill and selected private profile.
+- The treatment also sends the exact runtime skill, the selected private profile, and `soul.md` when present, since it is part of what the runtime drafts with.
 - Real held-out responses are not sent during candidate generation.
 - The repository adds no telemetry or direct API request, but the local agent CLI still contacts its provider.
 
