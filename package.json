@@ -1,0 +1,14 @@
+{
+  "name": "tone-of-voice-skills",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable skills for training, using, and evaluating a private tone of voice",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/repository.test.mjs tests/prepare-corpus.test.mjs tests/run-agent.test.mjs tests/run-eval.test.mjs tests/review-eval.test.mjs"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,2 @@
+{"id":"slack-5","platform":"slack","context":"group-chat","scenario":"Share that a paper model is available for review.","facts":["The paper model is ready"],"constraints":["Ask for comments"]}
+{"id":"email-2","platform":"email","context":"project-update","scenario":"Send a project update after incorporating feedback.","facts":["Notes were incorporated","One question remains open"],"constraints":["Use an email format"]}

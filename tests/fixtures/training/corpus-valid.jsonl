@@ -1,0 +1,8 @@
+{"id":"slack-1","platform":"slack","context":"direct-message","group":"thread-a","text":"Could you send the moon map by Thursday?","timestamp":"2026-07-01T01:00:00Z"}
+{"id":"slack-2","platform":"slack","context":"direct-message","group":"thread-a","text":"Perfect, I will check the labels this afternoon."}
+{"id":"slack-3","platform":"slack","context":"group-chat","group":"thread-b","text":"The garden route is clear now. Thanks for sorting it."}
+{"id":"slack-4","platform":"slack","context":"direct-message","group":"thread-c","text":"I can review the blue sketch after lunch."}
+{"id":"slack-5","platform":"slack","context":"group-chat","group":"thread-d","text":"Small update: the paper model is ready for comments."}
+{"id":"slack-6","platform":"slack","context":"direct-message","group":"thread-e","text":"That timing works. I will bring the orange folder."}
+{"id":"email-1","platform":"email","context":"project-update","group":"letter-a","text":"Hello,\n\nThe lighthouse draft is attached for review.\n\nThank you."}
+{"id":"email-2","platform":"email","context":"project-update","group":"letter-b","text":"Hello,\n\nI have incorporated the notes and marked the open question.\n\nThank you."}

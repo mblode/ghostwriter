@@ -1,0 +1,2 @@
+{"id":"slack-001","platform":"slack","context":"direct-message","scenario":"Ask a collaborator to move a planning call","facts":["The current call is Thursday","Friday afternoon is available"],"constraints":["Ask rather than assume"]}
+{"id":"email-001","platform":"email","context":"project-update","scenario":"Confirm that revised drawings are ready","facts":["The revised drawings are attached","Comments are due Monday"],"constraints":["End with a clear next step"]}
