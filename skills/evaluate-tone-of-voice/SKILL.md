@@ -86,6 +86,7 @@ Keep the immutable run as evidence. Start a new run after changing any skill, pr
 
 ## Gotchas
 
+- `ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension ".ts"` means the local Node is older than 22.18 and cannot run these scripts. Report the version and ask the user to upgrade; nothing in this skill works around it.
 - Never add `--references` to `run-eval.ts`; the option is intentionally unsupported so held-out answers cannot enter candidate prompts.
 - Never weaken Codex's flag set. `--disable shell_tool` matters because a read-only sandbox blocks writes but still allows private file reads; the apps, multi-agent, image-generation and web-search disables each close an uncontrolled generation path; and `-c skills.include_instructions=false` matters because `--ignore-user-config` alone still exposes globally installed skill descriptions and can contaminate the baseline.
 - Codex still registers `update_plan`, `request_user_input`, `apply_patch`, and `view_image`. Read-only mode blocks `apply_patch`; prompt rules prohibit all tools; local image-path rejection limits `view_image` reads.

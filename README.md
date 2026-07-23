@@ -20,7 +20,7 @@ Or select one interactively:
 
     npx skills add mblode/tone-of-voice
 
-Requires Node.js 22.18 or newer, which runs the TypeScript sources directly. There are no runtime dependencies.
+Drafting needs nothing but the agent. Training and evaluation run bundled scripts, so they need Node.js 22.18 or newer, which runs the TypeScript sources directly. On older Node those scripts fail with `ERR_UNKNOWN_FILE_EXTENSION`. There are no runtime dependencies.
 
 ## Quick start
 

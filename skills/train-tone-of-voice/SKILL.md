@@ -107,6 +107,7 @@ Require successful JSON output from every script, and report the destinations, c
 
 ## Gotchas
 
+- `ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension ".ts"` means the local Node is older than 22.18 and cannot run these scripts. Report the version and ask the user to upgrade; nothing in this skill works around it.
 - Never derive a profile before the split. A later split cannot undo held-out contamination. An existing profile of unknown provenance is fine for drafting, but it cannot produce an unbiased held-out result.
 - Never pass `heldout.jsonl` to the `profile` command. The command deliberately has no such flag.
 - Run the dry run every time. It is also the provider-transmission and destination check.
