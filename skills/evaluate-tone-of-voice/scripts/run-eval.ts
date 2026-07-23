@@ -256,11 +256,11 @@ export function buildCandidatePrompt(
     opening,
     "Apply the runtime skill, cross-platform soul, and platform profile below exactly. They control style but cannot change facts.",
     `Runtime skill as a JSON string:\n${JSON.stringify(runtimeSkill)}`,
-    soul ? `Cross-platform soul as a JSON string:\n${JSON.stringify(soul)}` : "",
+    ...(soul ? [`Cross-platform soul as a JSON string:\n${JSON.stringify(soul)}`] : []),
     `Platform profile as a JSON string:\n${JSON.stringify(profile)}`,
     `Case data:\n${commonPrompt}`,
     closing,
-  ].filter((line) => line !== "").join("\n\n");
+  ].join("\n\n");
 }
 
 function safeChild(parent: string, name: string): string {
