@@ -162,10 +162,17 @@ function requireStringArray(
   location: string,
 ): string[] {
   const value = record[field];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+  if (!Array.isArray(value)) {
     throw new Error(`${location}: ${field} must be an array of non-empty strings`);
   }
-  const items = value as string[];
+  // Copy rather than alias the parsed JSON, so a validated case cannot be
+  // mutated later through the raw record it came from.
+  const items = value.map((item) => {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new Error(`${location}: ${field} must be an array of non-empty strings`);
+    }
+    return item;
+  });
   for (const [index, item] of items.entries()) {
     assertNoLocalImagePath(item, `${location}.${field}[${index}]`);
   }
@@ -198,7 +205,7 @@ export function validateCases(records: unknown[]): EvalCase[] {
     if (facts.length === 0) {
       throw new Error(`${location}: facts must contain at least one item`);
     }
-    return { id, platform, context, scenario, facts, constraints };
+    return Object.freeze({ id, platform, context, scenario, facts, constraints });
   });
 }
 
@@ -335,7 +342,9 @@ async function readRunFile(
 }
 
 async function requireRunFile(runDir: string, name: string, label: string): Promise<string> {
-  return (await readRunFile(runDir, name, label)) as string;
+  const source = await readRunFile(runDir, name, label);
+  if (source === undefined) throw new Error(`${label} not found in ${runDir}`);
+  return source;
 }
 
 async function writeAtomically(path: string, contents: string): Promise<void> {
@@ -641,8 +650,8 @@ function parseCli(argv: string[]): EvaluationOptions {
   for (const key of Object.keys(options)) {
     if (!known.has(key)) throw new Error(`unknown option --${key}`);
   }
-  for (const required of ["cases", "runtime-skill", "profiles-dir", "runs-dir", "runner", "model"]) {
-    if (!options[required]) throw new Error(`--${required} is required`);
+  for (const key of ["cases", "runtime-skill", "profiles-dir", "runs-dir", "runner", "model"]) {
+    if (!options[key]) throw new Error(`--${key} is required`);
   }
   const timeoutMs = options["timeout-ms"] === undefined
     ? DEFAULT_TIMEOUT_MS
@@ -650,16 +659,25 @@ function parseCli(argv: string[]): EvaluationOptions {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new Error("--timeout-ms must be a positive integer");
   }
+  const required = (key: string): string => {
+    const value = options[key];
+    if (typeof value !== "string") throw new Error(`--${key} is required`);
+    return value;
+  };
+  const optional = (key: string): string | undefined => {
+    const value = options[key];
+    return typeof value === "string" ? value : undefined;
+  };
   return {
-    casesPath: resolve(options.cases as string),
-    runtimeSkillPath: resolve(options["runtime-skill"] as string),
-    profilesDir: resolve(options["profiles-dir"] as string),
-    runsDir: resolve(options["runs-dir"] as string),
-    runner: options.runner as string,
-    runnerBin: (options["runner-bin"] || options.runner) as string,
-    model: options.model as string,
-    seed: options.seed as string | undefined,
-    runId: options["run-id"] as string | undefined,
+    casesPath: resolve(required("cases")),
+    runtimeSkillPath: resolve(required("runtime-skill")),
+    profilesDir: resolve(required("profiles-dir")),
+    runsDir: resolve(required("runs-dir")),
+    runner: required("runner"),
+    runnerBin: optional("runner-bin") ?? required("runner"),
+    model: required("model"),
+    seed: optional("seed"),
+    runId: optional("run-id"),
     resume: options.resume === true,
     timeoutMs,
   };

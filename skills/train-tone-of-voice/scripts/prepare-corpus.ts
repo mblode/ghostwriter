@@ -155,7 +155,7 @@ function requireString(
   field: string,
   source: string,
   lineNumber: number | undefined,
-  { max = 20_000 }: { max?: number } = {},
+  { max = MAX_TEXT_CHARACTERS }: { max?: number } = {},
 ): string {
   const value = record[field];
   if (typeof value !== 'string' || value.trim() === '') {
@@ -178,7 +178,11 @@ function validateIdentifier(value: string, field: string, source: string, lineNu
   }
 }
 
-export function validatePlatform(value: unknown, source = 'platform', lineNumber?: number): void {
+export function validatePlatform(
+  value: unknown,
+  source = 'platform',
+  lineNumber?: number,
+): asserts value is string {
   if (typeof value !== 'string' || !SAFE_SLUG.test(value) || value.length > 64) {
     throw new UserInputError(
       `${location(source, lineNumber)}: platform must be a lowercase kebab-case slug of at most 64 characters`,
@@ -223,13 +227,16 @@ export function validateRecord(
   return { id, platform, context, group, text, timestamp };
 }
 
-export function parseJsonl<T extends { id: string } = CorpusRecord>(
+export function parseJsonl(content: string, options?: { source?: string }): CorpusRecord[];
+export function parseJsonl<T extends { id: string }>(
   content: string,
-  {
-    source = 'input',
-    validate = validateRecord as unknown as Validator<T>,
-  }: { source?: string; validate?: Validator<T> } = {},
+  options: { source?: string; validate: Validator<T> },
+): T[];
+export function parseJsonl<T extends { id: string }>(
+  content: string,
+  { source = 'input', validate }: { source?: string; validate?: Validator<T> } = {},
 ): T[] {
+  const validateLine = validate ?? (validateRecord as unknown as Validator<T>);
   if (content.length === 0) {
     throw new UserInputError(`${source}: expected non-empty UTF-8 JSONL`);
   }
@@ -253,7 +260,7 @@ export function parseJsonl<T extends { id: string } = CorpusRecord>(
       throw new UserInputError(`${source}:${lineNumber}: invalid JSON (${errorMessage(error)})`);
     }
 
-    const record = validate(parsed, { source, lineNumber });
+    const record = validateLine(parsed, { source, lineNumber });
     if (seenIds.has(record.id)) {
       throw new UserInputError(`${source}:${lineNumber}: duplicate id ${JSON.stringify(record.id)}`);
     }
@@ -460,7 +467,7 @@ export async function writeAtomically(
   home: string,
   target: string,
   content: string,
-  { renameImpl = rename as RenameImpl }: { renameImpl?: RenameImpl } = {},
+  { renameImpl = rename }: { renameImpl?: RenameImpl } = {},
 ): Promise<void> {
   const root = resolve(home);
   const resolvedTarget = confinedPath(root, relative(root, resolve(target)));
@@ -498,7 +505,7 @@ async function stageWrite(
   // Verify staged bytes before any backup or destination rename. This makes an
   // incomplete disk write a pre-commit failure instead of a mixed generation.
   const stagedContent = await readFile(temporary, 'utf8');
-  if (sha256(stagedContent) !== sha256(content)) {
+  if (stagedContent !== content) {
     await rm(temporary, { force: true });
     throw new TransactionError(`staged content verification failed for ${resolvedTarget}`);
   }
@@ -539,8 +546,8 @@ export async function writeSetTransactionally(
   entries: TransactionEntry[],
   {
     now = new Date(),
-    renameImpl = rename as RenameImpl,
-    rollbackRenameImpl = rename as RenameImpl,
+    renameImpl = rename,
+    rollbackRenameImpl = rename,
   }: TransactionOptions = {},
 ): Promise<{ backups: Record<string, string | null> }> {
   if (entries.length < 2) {
@@ -797,7 +804,7 @@ export async function buildProfilePlan(
     destination,
     preview: {
       kind: 'profile',
-      platform: platform as string,
+      platform,
       source: { path: sourcePath, sha256: sha256(markdown) },
       destination,
       heldoutRecordsChecked: heldout.length,
@@ -975,19 +982,27 @@ interface CliOptions {
   references?: string;
 }
 
+const COMMANDS = ['corpus', 'profile', 'eval'] as const;
+const MODES = ['dry-run', 'execute'] as const;
+
+export function isOneOf<T extends string>(allowed: readonly T[], value: string): value is T {
+  return (allowed as readonly string[]).includes(value);
+}
+
 function parseArguments(argv: string[]): CliOptions {
   const [command = 'corpus', ...rest] = argv;
-  if (!['corpus', 'profile', 'eval'].includes(command)) {
+  if (!isOneOf(COMMANDS, command)) {
     throw new UserInputError(`unknown command ${JSON.stringify(command)}; expected corpus, profile, or eval`);
   }
-  const values: Record<string, string | boolean> = { command, mode: 'dry-run', confirmWrite: false };
+  const values: Record<string, string> = {};
+  let confirmWrite = false;
   const valueFlags = new Set([
     '--input', '--home', '--seed', '--mode', '--platform', '--cases', '--references',
   ]);
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
     if (flag === '--confirm-write') {
-      values.confirmWrite = true;
+      confirmWrite = true;
       continue;
     }
     if (!valueFlags.has(flag)) throw new UserInputError(`unknown option ${JSON.stringify(flag)}`);
@@ -997,13 +1012,24 @@ function parseArguments(argv: string[]): CliOptions {
     const key = flag.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
     values[key] = value;
   }
-  if (!['dry-run', 'execute'].includes(values.mode as string)) {
+  const mode = values.mode ?? 'dry-run';
+  if (!isOneOf(MODES, mode)) {
     throw new UserInputError('--mode must be dry-run or execute');
   }
-  if (values.mode === 'execute' && !values.confirmWrite) {
+  if (mode === 'execute' && !confirmWrite) {
     throw new UserInputError('execute mode requires --confirm-write after reviewing a dry run');
   }
-  return values as unknown as CliOptions;
+  return {
+    command,
+    mode,
+    confirmWrite,
+    input: values.input,
+    home: values.home,
+    seed: values.seed,
+    platform: values.platform,
+    cases: values.cases,
+    references: values.references,
+  };
 }
 
 async function runCommand<P extends { preview: object }>(

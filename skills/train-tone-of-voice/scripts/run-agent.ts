@@ -9,6 +9,7 @@ import {
   confinedPath,
   errorCode,
   errorMessage,
+  isOneOf,
   parseJsonl,
   resolveDataHome,
   sha256,
@@ -436,21 +437,21 @@ function validateCaseOutput(output: Record<string, unknown>): CaseOutput {
   if (typeof output.scenario !== 'string' || !output.scenario.trim()) {
     throw new RunnerError('case scenario must be a non-empty string', { reason: 'schema' });
   }
-  for (const field of ['facts', 'constraints'] as const) {
-    const value = output[field];
-    const minimum = field === 'facts' ? 1 : 0;
-    if (!Array.isArray(value) || value.length < minimum || value.some(
-      (item) => typeof item !== 'string' || !item.trim(),
-    )) {
-      const requirement = minimum === 0 ? 'a string array' : 'a non-empty string array';
-      throw new RunnerError(`case ${field} must be ${requirement}`, { reason: 'schema' });
-    }
-  }
   return {
     scenario: output.scenario,
-    facts: output.facts as string[],
-    constraints: output.constraints as string[],
+    facts: requireCaseStrings(output.facts, 'facts', 1),
+    constraints: requireCaseStrings(output.constraints, 'constraints', 0),
   };
+}
+
+function requireCaseStrings(value: unknown, field: string, minimum: number): string[] {
+  const requirement = minimum === 0 ? 'a string array' : 'a non-empty string array';
+  const reject = () => new RunnerError(`case ${field} must be ${requirement}`, { reason: 'schema' });
+  if (!Array.isArray(value) || value.length < minimum) throw reject();
+  return value.map((item) => {
+    if (typeof item !== 'string' || !item.trim()) throw reject();
+    return item;
+  });
 }
 
 async function readLimited(path: string, maximum = MAX_CORPUS_BYTES): Promise<string> {
@@ -534,7 +535,7 @@ export async function buildProfileTask(
     throw new UserInputError(`train.jsonl contains no records for platform ${JSON.stringify(platform)}`);
   }
   const template = await readConfinedModelInput(SKILL_DIRECTORY, PROFILE_TEMPLATE_PATH, 128 * 1024);
-  const prompt = buildProfilePrompt({ platform: platform as string, records, template });
+  const prompt = buildProfilePrompt({ platform, records, template });
   return {
     prompt,
     schema: PROFILE_SCHEMA,
@@ -608,17 +609,16 @@ interface CliOptions {
   maxOutputBytes: number;
 }
 
+const TASKS = ['profile', 'case'] as const;
+const MODES = ['dry-run', 'execute'] as const;
+
 function parseArguments(argv: string[]): CliOptions {
   const [task, ...rest] = argv;
-  if (!['profile', 'case'].includes(task)) {
+  if (!isOneOf(TASKS, task)) {
     throw new UserInputError('first argument must be profile or case');
   }
-  const options: Record<string, string | boolean | number> = {
-    task,
-    mode: 'dry-run',
-    runner: 'codex',
-    confirmSend: false,
-  };
+  const values: Record<string, string> = {};
+  let confirmSend = false;
   const valueFlags = new Set([
     '--home', '--platform', '--runner', '--model', '--id', '--mode', '--binary',
     '--timeout-ms', '--max-output-bytes',
@@ -626,7 +626,7 @@ function parseArguments(argv: string[]): CliOptions {
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
     if (flag === '--confirm-send') {
-      options.confirmSend = true;
+      confirmSend = true;
       continue;
     }
     if (!valueFlags.has(flag)) throw new UserInputError(`unknown option ${JSON.stringify(flag)}`);
@@ -634,21 +634,32 @@ function parseArguments(argv: string[]): CliOptions {
     if (!value || value.startsWith('--')) throw new UserInputError(`${flag} requires a value`);
     index += 1;
     const key = flag.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
-    options[key] = value;
+    values[key] = value;
   }
-  if (!['dry-run', 'execute'].includes(options.mode as string)) {
+  const mode = values.mode ?? 'dry-run';
+  if (!isOneOf(MODES, mode)) {
     throw new UserInputError('--mode must be dry-run or execute');
   }
-  if (options.mode === 'execute' && !options.confirmSend) {
+  if (mode === 'execute' && !confirmSend) {
     throw new UserInputError('execute mode requires --confirm-send after reviewing a dry run');
   }
-  options.timeoutMs = ensurePositiveInteger(options.timeoutMs, '--timeout-ms', DEFAULT_TIMEOUT_MS);
-  options.maxOutputBytes = ensurePositiveInteger(
-    options.maxOutputBytes,
-    '--max-output-bytes',
-    DEFAULT_MAX_OUTPUT_BYTES,
-  );
-  return options as unknown as CliOptions;
+  return {
+    task,
+    mode,
+    confirmSend,
+    runner: values.runner ?? 'codex',
+    home: values.home,
+    platform: values.platform,
+    model: values.model,
+    id: values.id,
+    binary: values.binary,
+    timeoutMs: ensurePositiveInteger(values.timeoutMs, '--timeout-ms', DEFAULT_TIMEOUT_MS),
+    maxOutputBytes: ensurePositiveInteger(
+      values.maxOutputBytes,
+      '--max-output-bytes',
+      DEFAULT_MAX_OUTPUT_BYTES,
+    ),
+  };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {

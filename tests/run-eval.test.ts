@@ -13,6 +13,8 @@ import {
   parseCandidateOutput,
   runEvaluation,
   runProcess,
+  type BlindRow,
+  type CandidateRecord,
   type EvalCase,
   type EvaluationOptions,
 } from "../skills/evaluate-tone-of-voice/scripts/run-eval.ts";
@@ -161,6 +163,10 @@ test("generates matched baseline and treatment pairs without reference access", 
           "--skip-git-repo-check",
           "--output-schema",
         ]);
+        // Pin the full length too: a capability-re-enabling flag appended after
+        // the slice above would otherwise pass while the manifest still claims
+        // the codex-restricted-v3 policy.
+        assert.equal(baseline.args.length, 24);
         const evalCase = JSON.parse((await readFile(CASES, "utf8")).trim().split("\n")[index / 2]) as EvalCase;
         const commonPrompt = buildCommonPrompt(evalCase);
         assert.ok(baseline.input.includes(commonPrompt));
@@ -173,7 +179,7 @@ test("generates matched baseline and treatment pairs without reference access", 
       assert.ok(calls[1].input.includes("SLACK_PROFILE_MARKER"));
       assert.ok(calls[3].input.includes("EMAIL_PROFILE_MARKER"));
 
-      const blind = await readJsonl<Record<string, unknown>>(join(result.runDir, "blind-review.jsonl"));
+      const blind = await readJsonl<BlindRow>(join(result.runDir, "blind-review.jsonl"));
       const manifest = JSON.parse(await readFile(join(result.runDir, "manifest.json"), "utf8"));
       assert.equal(blind.length, 2);
       for (const row of blind) {
@@ -187,14 +193,18 @@ test("generates matched baseline and treatment pairs without reference access", 
           "candidateA",
           "candidateB",
         ]);
-        assert.deepEqual(manifest.blindMapping[row.id as string], blindAssignment("fixed-seed", row.id as string));
+        assert.deepEqual(manifest.blindMapping[row.id], blindAssignment("fixed-seed", row.id));
       }
       assert.equal(manifest.status, "generated");
       assert.equal(manifest.runner.version, "codex test-1.0.0");
-      assert.deepEqual(manifest.config.generation.capabilityPolicy, {
-        version: "codex-restricted-v3",
-        disabled: ["shell_tool", "apps", "multi_agent", "image_generation", "web_search", "skill_instructions"],
-        residual: ["update_plan", "request_user_input", "apply_patch", "view_image"],
+      assert.deepEqual(manifest.config.generation, {
+        structuredOutput: true,
+        sessionPersistence: false,
+        capabilityPolicy: {
+          version: "codex-restricted-v3",
+          disabled: ["shell_tool", "apps", "multi_agent", "image_generation", "web_search", "skill_instructions"],
+          residual: ["update_plan", "request_user_input", "apply_patch", "view_image"],
+        },
       });
     });
   } finally {
@@ -299,10 +309,10 @@ test("encodes delimiter-like input as data and rejects local image paths", () =>
 });
 
 test("resume rejects tampered candidate identity and metadata", { concurrency: false }, async () => {
-  const tampers: [string, (record: any) => void, RegExp][] = [
+  const tampers: [string, (record: CandidateRecord) => void, RegExp][] = [
     ["identity", (record) => { record.platform = "email"; }, /identity, platform, or context was changed/],
-    ["argv", (record) => { record.baseline.metadata.argv = ["unsafe"]; }, /argv does not match/],
-    ["text", (record) => { record.baseline.text = "tampered output"; }, /text hash does not match/],
+    ["argv", (record) => { record.baseline!.metadata.argv = ["unsafe"]; }, /argv does not match/],
+    ["text", (record) => { record.baseline!.text = "tampered output"; }, /text hash does not match/],
     ["branch", (record) => { delete record.baseline; }, /stored branch sequence is impossible/],
   ];
   for (const [name, mutate, expected] of tampers) {
@@ -314,7 +324,7 @@ test("resume rejects tampered candidate identity and metadata", { concurrency: f
         await assert.rejects(runEvaluation(options(root, binary)), /fictional transient failure/);
         delete process.env.TOV_FAIL_TREATMENT_ONCE;
         const candidatesPath = join(root, "runs/test-run/candidates.jsonl");
-        const record = JSON.parse((await readFile(candidatesPath, "utf8")).trim());
+        const record = JSON.parse((await readFile(candidatesPath, "utf8")).trim()) as CandidateRecord;
         mutate(record);
         await writeFile(candidatesPath, `${JSON.stringify(record)}\n`);
         await assert.rejects(runEvaluation(options(root, binary, { resume: true })), expected);

@@ -1,7 +1,6 @@
 {
   "compilerOptions": {
     "target": "es2023",
-    "lib": ["es2023"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "types": ["node"],
@@ -9,6 +8,7 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
+    "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },

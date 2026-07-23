@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
@@ -56,6 +57,29 @@ test("every bundled skill support file is linked from its SKILL.md", async () =>
         `${name}/SKILL.md does not link ${pathFromSkill}`,
       );
     }
+  }
+});
+
+test("private-data ignore rules stay root-anchored and do not hide fixtures", () => {
+  // .gitignore lists /corpus/, /evals/, /profiles/ and /data/ so a private data
+  // root at the repository root is ignored. Dropping a leading slash would also
+  // match these fixture paths, and `git add` would silently skip them.
+  for (const path of [
+    "tests/fixtures/evaluation/profiles/slack.md",
+    "tests/fixtures/evaluation/cases.jsonl",
+    "tests/fixtures/training/corpus-valid.jsonl",
+  ]) {
+    let ignored = false;
+    try {
+      execFileSync("git", ["check-ignore", "--quiet", "--no-index", path], {
+        cwd: REPOSITORY_ROOT,
+        stdio: "ignore",
+      });
+      ignored = true;
+    } catch {
+      ignored = false;
+    }
+    assert.equal(ignored, false, `${path} is unexpectedly ignored`);
   }
 });
 

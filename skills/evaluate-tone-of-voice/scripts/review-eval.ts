@@ -5,11 +5,18 @@ import { lstat, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// BlindRow and Branch describe blind-review.jsonl, which run-eval.ts writes and
+// this script reads. Import the types rather than restating them so the two
+// halves of that on-disk contract cannot drift apart. Type-only, so nothing of
+// run-eval.ts reaches the runtime of this script.
+import type { BlindRow, Branch } from "./run-eval.ts";
+
+export type { BlindRow, Branch };
+
 export type Choice = "a" | "b" | "tie" | "invalid";
 export type Outcome = "treatment-win" | "baseline-win" | "tie" | "invalid";
-export type Branch = "baseline" | "treatment";
 
-const CHOICES = new Set<string>(["a", "b", "tie", "invalid"]);
+const CHOICES = ["a", "b", "tie", "invalid"] as const;
 const OUTCOMES = new Set<string>(["treatment-win", "baseline-win", "tie", "invalid"]);
 const BLIND_FIELDS = new Set([
   "id",
@@ -22,15 +29,8 @@ const BLIND_FIELDS = new Set([
   "candidateB",
 ]);
 
-export interface BlindRow {
-  id: string;
-  platform: string;
-  context: string;
-  scenario: string;
-  facts: string[];
-  constraints: string[];
-  candidateA: string;
-  candidateB: string;
+function isChoice(value: unknown): value is Choice {
+  return typeof value === "string" && (CHOICES as readonly string[]).includes(value);
 }
 
 export interface Label {
@@ -120,6 +120,12 @@ async function readRunFile(
   return readFile(canonicalPath, "utf8");
 }
 
+async function requireRunFile(runDir: string, name: string, label: string): Promise<string> {
+  const source = await readRunFile(runDir, name, label);
+  if (source === undefined) throw new Error(`${label} not found in ${runDir}`);
+  return source;
+}
+
 export function parseJsonl(source: string, label = "JSONL"): unknown[] {
   const records: unknown[] = [];
   for (const [index, raw] of source.split(/\r?\n/).entries()) {
@@ -148,10 +154,15 @@ function requireStringArray(
   location: string,
 ): string[] {
   const value = record[field];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+  if (!Array.isArray(value)) {
     throw new Error(`${location}: ${field} must be an array of non-empty strings`);
   }
-  return value as string[];
+  return value.map((item) => {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new Error(`${location}: ${field} must be an array of non-empty strings`);
+    }
+    return item;
+  });
 }
 
 export function validateBlindRows(records: unknown[]): BlindRow[] {
@@ -206,11 +217,11 @@ export function choiceToOutcome(
   mapping: { a: Branch; b: Branch } | undefined,
   caseId = "case",
 ): Outcome {
-  if (!CHOICES.has(choice)) {
+  if (!isChoice(choice)) {
     throw new Error(`${caseId}: choice must be a, b, tie, or invalid`);
   }
   if (choice === "tie" || choice === "invalid") return choice;
-  const branch = mapping?.[choice as "a" | "b"];
+  const branch = mapping?.[choice];
   if (branch !== "baseline" && branch !== "treatment") {
     throw new Error(`${caseId}: manifest has an invalid blind mapping`);
   }
@@ -220,6 +231,10 @@ export function choiceToOutcome(
 function expectedBlindAssignment(seed: string, caseId: string): { a: Branch; b: Branch } {
   const treatmentIsA = Number.parseInt(sha256(`${seed}\0${caseId}`).slice(0, 2), 16) % 2 === 0;
   return treatmentIsA ? { a: "treatment", b: "baseline" } : { a: "baseline", b: "treatment" };
+}
+
+function isBranch(value: unknown): value is Branch {
+  return value === "baseline" || value === "treatment";
 }
 
 function validateBlindMapping(mapping: unknown, blindRows: BlindRow[], seed: unknown): BlindMapping {
@@ -233,6 +248,7 @@ function validateBlindMapping(mapping: unknown, blindRows: BlindRow[], seed: unk
   if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
     throw new Error("manifest blindMapping IDs do not match blind-review IDs");
   }
+  const validated: BlindMapping = {};
   for (const id of expectedIds) {
     const entry = asObject(mappings[id]);
     if (!entry) throw new Error(`manifest blindMapping for ${JSON.stringify(id)} is invalid`);
@@ -240,15 +256,16 @@ function validateBlindMapping(mapping: unknown, blindRows: BlindRow[], seed: unk
     if (JSON.stringify(fields) !== JSON.stringify(["a", "b"])) {
       throw new Error(`manifest blindMapping for ${JSON.stringify(id)} must contain only a and b`);
     }
-    const branches = new Set([entry.a, entry.b]);
-    if (!branches.has("baseline") || !branches.has("treatment") || entry.a === entry.b) {
+    const { a, b } = entry;
+    if (!isBranch(a) || !isBranch(b) || a === b) {
       throw new Error(`manifest blindMapping for ${JSON.stringify(id)} must assign baseline and treatment once each`);
     }
     if (JSON.stringify(entry) !== JSON.stringify(expectedBlindAssignment(seed, id))) {
       throw new Error(`manifest blindMapping for ${JSON.stringify(id)} does not match its recorded seed`);
     }
+    validated[id] = { a, b };
   }
-  return mappings as BlindMapping;
+  return validated;
 }
 
 export interface Bucket {
@@ -351,11 +368,11 @@ function parseLabelInputs(records: unknown[], validIds: Set<string>): Map<string
     if (typeof id !== "string" || !validIds.has(id)) {
       throw new Error(`${location}: unknown case ${JSON.stringify(id)}`);
     }
-    if (typeof record.choice !== "string" || !CHOICES.has(record.choice)) {
+    if (!isChoice(record.choice)) {
       throw new Error(`${location}: choice must be a, b, tie, or invalid`);
     }
     if (choices.has(id)) throw new Error(`${location}: duplicate id ${JSON.stringify(id)}`);
-    choices.set(id, record.choice as Choice);
+    choices.set(id, record.choice);
   }
   return choices;
 }
@@ -379,18 +396,25 @@ async function loadExistingLabels(
     }
     const row = typeof record.id === "string" ? rowsById.get(record.id) : undefined;
     if (!row) throw new Error(`${location}: unknown case ${JSON.stringify(record.id)}`);
-    if (typeof record.choice !== "string" || !CHOICES.has(record.choice)) {
+    if (!isChoice(record.choice)) {
       throw new Error(`${location}: invalid choice`);
     }
     if (record.platform !== row.platform) throw new Error(`${location}: platform does not match blind review`);
-    if (record.outcome !== choiceToOutcome(record.choice, mapping[row.id], row.id)) {
+    const outcome = choiceToOutcome(record.choice, mapping[row.id], row.id);
+    if (record.outcome !== outcome) {
       throw new Error(`${location}: outcome does not match choice and blind mapping`);
     }
     if (typeof record.labeledAt !== "string" || Number.isNaN(Date.parse(record.labeledAt))) {
       throw new Error(`${location}: labeledAt is invalid`);
     }
     if (labels.has(row.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(row.id)}`);
-    labels.set(row.id, record as unknown as Label);
+    labels.set(row.id, {
+      id: row.id,
+      platform: row.platform,
+      choice: record.choice,
+      outcome,
+      labeledAt: record.labeledAt,
+    });
   }
   return labels;
 }
@@ -428,7 +452,7 @@ async function askForChoice(
   output.write(`${formatCaseForReview(row, reference, position, total)}\n`);
   while (true) {
     const answer = (await reader.question("Choice [a/b/tie/invalid]: ")).trim().toLowerCase();
-    if (CHOICES.has(answer)) return answer as Choice;
+    if (isChoice(answer)) return answer;
     output.write("Enter a, b, tie, or invalid.\n");
   }
 }
@@ -451,12 +475,12 @@ export async function reviewEvaluation(
   const labelsPath = safeChild(resolvedRunDir, "labels.jsonl");
   const reportPath = safeChild(resolvedRunDir, "report.md");
   const manifest = JSON.parse(
-    (await readRunFile(resolvedRunDir, "manifest.json", "manifest")) as string,
+    await requireRunFile(resolvedRunDir, "manifest.json", "manifest"),
   ) as Record<string, unknown>;
   if (manifest.status !== "generated" && manifest.status !== "reviewed") {
     throw new Error(`run is not ready for review (status: ${manifest.status || "unknown"})`);
   }
-  const blindSource = (await readRunFile(resolvedRunDir, "blind-review.jsonl", "blind-review")) as string;
+  const blindSource = await requireRunFile(resolvedRunDir, "blind-review.jsonl", "blind-review");
   const blindRows = validateBlindRows(parseJsonl(blindSource, "blind-review"));
   const validIds = new Set(blindRows.map((row) => row.id));
   const rowsById = new Map(blindRows.map((row) => [row.id, row]));
