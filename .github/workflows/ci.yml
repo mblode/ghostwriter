@@ -18,11 +18,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.18
+          cache: npm
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Install Agent Skills validator
         run: python -m pip install --disable-pip-version-check skills-ref

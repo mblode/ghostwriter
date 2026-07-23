@@ -5,10 +5,15 @@
   "description": "Portable skills for training, using, and evaluating a private tone of voice",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "scripts": {
-    "test": "node --test tests/repository.test.mjs tests/prepare-corpus.test.mjs tests/run-agent.test.mjs tests/run-eval.test.mjs tests/review-eval.test.mjs"
+    "typecheck": "tsc",
+    "test": "tsc && node --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.9.2"
   },
   "license": "MIT"
 }

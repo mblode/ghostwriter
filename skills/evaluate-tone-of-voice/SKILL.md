@@ -10,28 +10,11 @@ Measure a fixed runtime skill and fixed private profiles against real held-out w
 - **IS:** clean candidate generation, deterministic blinding, human review, and descriptive reporting.
 - **IS NOT:** training profiles, modifying corpora, grading with another model, or exposing the treatment before a human choice. Use `train-tone-of-voice` to create profiles and held-out cases.
 
-## Reference
+Read [references/evaluation-method.md](references/evaluation-method.md) before every evaluation, to validate inputs, protect the blind, and interpret the report.
 
-| File | Read when |
-|---|---|
-| [references/evaluation-method.md](references/evaluation-method.md) | Before every evaluation, to validate inputs, protect the blind, and interpret the report. |
+The scripts execute the deterministic parts of this workflow. Do not reproduce their logic manually. `scripts/run-eval.ts` generates candidates without opening references. `scripts/review-eval.ts` joins references only after generation and records human choices. The scripts use [assets/candidate-output.schema.json](assets/candidate-output.schema.json) for structured runner output; do not edit it per run.
 
-The scripts execute the deterministic parts of this workflow. Do not reproduce their logic manually. `scripts/run-eval.mjs` generates candidates without opening references. `scripts/review-eval.mjs` joins references only after generation and records human choices. The scripts use [assets/candidate-output.schema.json](assets/candidate-output.schema.json) for structured runner output; do not edit it per run.
-
-## Workflow
-
-Copy and update this checklist:
-
-```text
-Evaluation progress:
-- [ ] 1. Pin inputs and runner
-- [ ] 2. Preview the provider boundary
-- [ ] 3. Generate matched candidate pairs
-- [ ] 4. Review every pair blind
-- [ ] 5. Verify counts and preserve the run
-```
-
-### 1. Pin inputs and runner
+## 1. Pin inputs and runner
 
 Resolve these paths explicitly:
 
@@ -47,7 +30,7 @@ Cases, profiles, and the runtime skill must not contain absolute or traversal-ba
 
 Existing profiles with unknown training provenance are useful for drafting, but they do not support an unbiased claim against examples they may have seen.
 
-### 2. Preview the provider boundary
+## 2. Preview the provider boundary
 
 Tell the user exactly what will happen before the first model call:
 
@@ -58,12 +41,12 @@ Tell the user exactly what will happen before the first model call:
 
 Get confirmation. Do not print private profile content as part of the preview.
 
-### 3. Generate matched pairs
+## 3. Generate matched pairs
 
 Run from this skill directory:
 
 ```bash
-node scripts/run-eval.mjs \
+node scripts/run-eval.ts \
   --cases <tone-home>/evals/cases.jsonl \
   --runtime-skill <installed-tone-of-voice>/SKILL.md \
   --profiles-dir <tone-home> \
@@ -76,12 +59,12 @@ Use `--runner claude` for Claude Code. The user may set `TONE_OF_VOICE_HOME`; ot
 
 The command prints the new run directory. On failure, preserve that directory and rerun the same command with its `--run-id` plus `--resume`. Resume is rejected if inputs, runner policy, or stored candidate metadata changed.
 
-### 4. Review blind
+## 4. Review blind
 
 Do not open `manifest.json` or `candidates.jsonl` before choices are complete. They contain branch identity. Run:
 
 ```bash
-node scripts/review-eval.mjs \
+node scripts/review-eval.ts \
   --run-dir <run-directory> \
   --references <tone-home>/evals/references.jsonl
 ```
@@ -90,7 +73,7 @@ For each case, choose `a`, `b`, `tie`, or `invalid`. Judge which candidate sound
 
 For an externally completed blind review, provide a JSONL choices file through `--labels-file`. It must contain only `id` and `choice`.
 
-### 5. Verify and preserve
+## 5. Verify and preserve
 
 Confirm:
 
@@ -103,7 +86,7 @@ Keep the immutable run as evidence. Start a new run after changing any skill, pr
 
 ## Gotchas
 
-- Never add `--references` to `run-eval.mjs`; the option is intentionally unsupported so held-out answers cannot enter candidate prompts.
+- Never add `--references` to `run-eval.ts`; the option is intentionally unsupported so held-out answers cannot enter candidate prompts.
 - Never remove Codex's `--disable shell_tool`; a read-only sandbox blocks writes but still allows private file reads.
 - Never remove Codex's apps, multi-agent, image-generation, or web-search disables; each reintroduces an uncontrolled generation path.
 - Never remove Codex's `-c skills.include_instructions=false`; `--ignore-user-config` alone still exposes globally installed skill descriptions and can contaminate the baseline.

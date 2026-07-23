@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename as renameFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
-  UserInputError,
   TransactionError,
   assertDisjoint,
   buildCorpusPlan,
@@ -21,20 +20,21 @@ import {
   validateCase,
   validateProfile,
   writeAtomically,
-} from '../skills/train-tone-of-voice/scripts/prepare-corpus.mjs';
+  type CorpusRecord,
+} from '../skills/train-tone-of-voice/scripts/prepare-corpus.ts';
 
 const fixtures = new URL('./fixtures/training/', import.meta.url);
-const prepareScript = new URL('../skills/train-tone-of-voice/scripts/prepare-corpus.mjs', import.meta.url);
+const prepareScript = new URL('../skills/train-tone-of-voice/scripts/prepare-corpus.ts', import.meta.url);
 
-async function temporaryDirectory() {
+async function temporaryDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'tone-of-voice-test-'));
 }
 
-async function fixture(name) {
+async function fixture(name: string): Promise<string> {
   return readFile(new URL(name, fixtures), 'utf8');
 }
 
-function validRecord(overrides = {}) {
+function validRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'sample-1',
     platform: 'slack',
@@ -45,7 +45,7 @@ function validRecord(overrides = {}) {
   };
 }
 
-async function writeEvalHeldout(home) {
+async function writeEvalHeldout(home: string): Promise<void> {
   await mkdir(join(home, 'corpus'), { recursive: true });
   await writeFile(join(home, 'corpus', 'heldout.jsonl'), serializeJsonl([
     validRecord({
@@ -80,7 +80,7 @@ test('strict JSONL parsing preserves allowed fields and reports source lines', a
 });
 
 test('strict corpus validation rejects dangerous or ambiguous records', () => {
-  const invalidRecords = [
+  const invalidRecords: [Record<string, unknown>, RegExp][] = [
     [validRecord({ recipient: 'someone' }), /unknown field "recipient"/],
     [validRecord({ group: undefined }), /unknown field "group"|group must be a non-empty string/],
     [validRecord({ text: '   ' }), /text must be a non-empty string/],
@@ -122,7 +122,7 @@ test('split is seeded, deterministic, platform-stratified, and group-disjoint', 
 
 test('split blocks a platform that cannot retain one group on each side', () => {
   assert.throws(
-    () => splitByGroup([validRecord()], 'seed'),
+    () => splitByGroup([validRecord() as unknown as CorpusRecord], 'seed'),
     /at least 2 are required for a disjoint split/,
   );
 });
@@ -194,7 +194,7 @@ test('corpus transaction rolls back the complete prior generation when a commit 
   await writeFile(input, originalInput.replace('orange folder', 'violet folder'));
   const replacementPlan = await buildCorpusPlan({ input, home, seed: 'fixed-seed' });
   let commitRenames = 0;
-  let transactionError;
+  let transactionError: unknown;
   try {
     await executeCorpusPlan(replacementPlan, {
       now: new Date('2026-07-23T00:05:00Z'),
@@ -211,9 +211,9 @@ test('corpus transaction rolls back the complete prior generation when a commit 
 
   assert.ok(transactionError instanceof TransactionError);
   assert.match(transactionError.message, /injected second commit failure; prior generation restored/);
-  assert.ok(transactionError.details.backups.train);
-  assert.ok(transactionError.details.backups.heldout);
-  assert.deepEqual(transactionError.details.rollback.restored, ['train']);
+  assert.ok(transactionError.details.backups?.train);
+  assert.ok(transactionError.details.backups?.heldout);
+  assert.deepEqual(transactionError.details.rollback?.restored, ['train']);
   assert.deepEqual(await Promise.all([
     readFile(originalPlan.destinations.train, 'utf8'),
     readFile(originalPlan.destinations.heldout, 'utf8'),
@@ -294,7 +294,7 @@ test('profile installation validates heldout, backs up, and replaces only the pl
   const plan = await buildProfilePlan({ input, platform: 'slack', home });
   const result = await executeProfilePlan(plan, { now: new Date('2026-07-23T00:02:00Z') });
   assert.equal(await readFile(join(home, 'slack.md'), 'utf8'), await fixture('profile-valid.md'));
-  assert.equal(await readFile(result.backup, 'utf8'), 'previous profile');
+  assert.equal(await readFile(result.backup!, 'utf8'), 'previous profile');
 });
 
 test('eval installation enforces strict, separate, matching case and reference records', async () => {
@@ -342,8 +342,9 @@ test('eval plan requires exact heldout provenance and permits empty constraints'
   const references = join(root, 'references.jsonl');
   const caseRecords = parseJsonl(await fixture('eval-cases.jsonl'), {
     validate: (record, options) => {
-      if (record.id === 'slack-5') record.constraints = [];
-      return validateCase(record, options);
+      const candidate = record as Record<string, unknown>;
+      if (candidate.id === 'slack-5') candidate.constraints = [];
+      return validateCase(candidate, options);
     },
   });
   await writeFile(cases, serializeJsonl(caseRecords));
@@ -361,7 +362,7 @@ test('eval plan requires exact heldout provenance and permits empty constraints'
 
   const wrongReference = join(root, 'wrong-reference.jsonl');
   const referenceRecords = parseJsonl(await fixture('eval-references.jsonl'), {
-    validate: (record) => record,
+    validate: (record) => record as { id: string; reference: string },
   });
   referenceRecords[0].reference = 'A different response that is not held out.';
   await writeFile(wrongReference, serializeJsonl(referenceRecords));
@@ -410,9 +411,9 @@ test('eval transaction never leaves mixed cases and references after a commit fa
         await renameFile(from, to);
       },
     }),
-    (error) => error instanceof TransactionError
-      && error.details.rollback.restored.includes('cases')
-      && Boolean(error.details.backups.references),
+    (error: unknown) => error instanceof TransactionError
+      && Boolean(error.details.rollback?.restored.includes('cases'))
+      && Boolean(error.details.backups?.references),
   );
   assert.deepEqual(await Promise.all([
     readFile(originalPlan.destinations.cases, 'utf8'),

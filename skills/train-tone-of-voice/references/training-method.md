@@ -4,7 +4,7 @@ This method keeps profile evidence and evaluation evidence disjoint, while makin
 
 ## 1. Split before synthesis
 
-`prepare-corpus.mjs` groups records by platform and group. For each platform it:
+`prepare-corpus.ts` groups records by platform and group. For each platform it:
 
 1. hashes `seed`, platform, and group with SHA-256;
 2. orders groups by hash, then group ID for an explicit tie-break;
@@ -22,7 +22,7 @@ Run `corpus --mode dry-run`. It validates the complete plan without writing. The
 
 ## 3. Generate a profile in isolation
 
-Run `run-agent.mjs profile`. This task has a deliberately narrow input surface:
+Run `run-agent.ts profile`. This task has a deliberately narrow input surface:
 
 - `<data-root>/corpus/train.jsonl`, filtered to the requested platform;
 - the bundled `assets/profile-template.md`; and
@@ -40,13 +40,13 @@ Claude Code runs in print mode, safe mode, without persistence or tools. Its out
 
 Review the generated profile against `assets/profile-template.md`. It must distinguish evidence from uncertainty, keep examples short and redacted, and avoid turning a single typo or event into a rule.
 
-Run `prepare-corpus.mjs profile --mode dry-run` before installation. The preview validates the trained-profile headings, rejects obvious email addresses and phone numbers, limits redacted example length, and checks that no complete held-out response was copied into the profile. Existing free-form profiles remain valid for runtime use; these stricter headings apply only to newly trained profiles.
+Run `prepare-corpus.ts profile --mode dry-run` before installation. The preview validates the trained-profile headings, rejects obvious email addresses and phone numbers, limits redacted example length, and checks that no complete held-out response was copied into the profile. Existing free-form profiles remain valid for runtime use; these stricter headings apply only to newly trained profiles.
 
 Execution requires `--confirm-write`, backs up the existing `<platform>.md`, and atomically replaces it. If validation or rename fails, the prior profile remains at its destination.
 
 ## 5. Build cases separately
 
-Run `run-agent.mjs case` for one held-out ID at a time. The model receives one held-out response and returns only:
+Run `run-agent.ts case` for one held-out ID at a time. The model receives one held-out response and returns only:
 
 ```json
 {"scenario":"...","facts":["..."],"constraints":["..."]}
@@ -66,10 +66,6 @@ It copies the real response into a physically separate reference record:
 
 The scenario must make the writing task reproducible without revealing distinctive wording from the reference. Facts contain only information candidate outputs must preserve. Constraints contain task-specific requirements, not personal style rules.
 
-Install cases and references together through `prepare-corpus.mjs eval`. It requires `corpus/heldout.jsonl` and verifies that every case ID, platform, context, and reference text exactly matches a held-out record. A subset is valid; arbitrary or training-seen references are not. It also rejects unknown fields, duplicate or mismatched IDs, a case containing `reference`, and writes outside the fixed eval destinations. Cases and references are staged and committed as one rollback-capable transaction.
+Install cases and references together through `prepare-corpus.ts eval`. It requires `corpus/heldout.jsonl` and verifies that every case ID, platform, context, and reference text exactly matches a held-out record. A subset is valid; arbitrary or training-seen references are not. It also rejects unknown fields, duplicate or mismatched IDs, a case containing `reference`, and writes outside the fixed eval destinations. Cases and references are staged and committed as one rollback-capable transaction.
 
-## 6. Interpret support honestly
-
-Fewer than ten usable held-out cases is a low-support warning, not a blocker or statistical threshold. Keep raw human judgments, investigate every invalid and treatment loss, and collect prospective held-out writing before making stronger claims.
-
-An existing profile with unknown provenance can be used to draft. It cannot produce an unbiased score against messages it may have been trained from.
+Fewer than ten usable held-out cases is a low-support warning, not a blocker or a statistical threshold. Collect prospective held-out writing before making stronger claims.

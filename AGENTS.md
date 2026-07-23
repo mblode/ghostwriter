@@ -1,8 +1,6 @@
 # Repository instructions
 
-## Scope
-
-This repository contains three independently installable Agent Skills. Keep the repository local-first, dependency-free at runtime, and safe for personal writing data.
+Three independently installable Agent Skills. Keep the repository local-first, dependency-free at runtime, and safe for personal writing data.
 
 ## Before editing
 
@@ -13,7 +11,8 @@ This repository contains three independently installable Agent Skills. Keep the 
 
 ## Implementation
 
-- Use Node.js standard-library modules. Do not add a dependency for work the standard library handles clearly.
+- Scripts are TypeScript run directly by Node's type stripping, so keep every file to erasable syntax (no enums, namespaces, or parameter properties).
+- Use Node.js standard-library modules. Do not add a runtime dependency for work the standard library handles clearly.
 - Spawn local agents with argument arrays and stdin, never through an interpolated shell command.
 - Keep deterministic data work in scripts and language judgment in the invoking agent.
 - Use plan, validate, execute for profile replacement and other multi-file writes.

@@ -18,13 +18,14 @@ import {
   parseJsonOutput,
   readConfinedModelInput,
   runAgent,
-} from '../skills/train-tone-of-voice/scripts/run-agent.mjs';
+} from '../skills/train-tone-of-voice/scripts/run-agent.ts';
+import type { CorpusRecord } from '../skills/train-tone-of-voice/scripts/prepare-corpus.ts';
 
-async function temporaryDirectory() {
+async function temporaryDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'tone-runner-test-'));
 }
 
-async function createStub(root) {
+async function createStub(root: string): Promise<string> {
   const stub = join(root, 'local-agent-stub.mjs');
   await writeFile(stub, `#!/usr/bin/env node
 import { appendFileSync, writeFileSync } from 'node:fs';
@@ -65,7 +66,7 @@ if (mode === 'hang') {
   return stub;
 }
 
-function corpusRecord(overrides = {}) {
+function corpusRecord(overrides: Partial<CorpusRecord> = {}): CorpusRecord {
   return {
     id: 'train-1',
     platform: 'slack',
@@ -76,7 +77,7 @@ function corpusRecord(overrides = {}) {
   };
 }
 
-test('Codex argv is explicit, isolated, read-only, and stdin-driven', async () => {
+test('Codex argv is explicit, isolated, read-only, and stdin-driven', () => {
   const args = buildCodexArgs({
     schemaPath: '/tmp/schema.json',
     outputPath: '/tmp/output.json',
@@ -149,14 +150,12 @@ test('Codex adapter sends the exact prompt on stdin and reads structured last me
   assert.equal(result.metadata.version, 'fictional-agent 1.2.3');
   assert.equal(result.metadata.runner, 'codex');
   assert.deepEqual(result.metadata.capabilityPolicy, capabilityPolicy('codex'));
-  assert.deepEqual(result.metadata.capabilityPolicy.residual, [
-    'update_plan',
-    'request_user_input',
-    'apply_patch',
-    'view_image',
-  ]);
-  assert.equal(Object.hasOwn(result.metadata.capabilityPolicy, 'tools'), false);
-  const calls = (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.deepEqual(result.metadata.capabilityPolicy, {
+    version: 'codex-restricted-v3',
+    disabled: ['shell_tool', 'apps', 'multi_agent', 'image_generation', 'web_search', 'skill_instructions'],
+    residual: ['update_plan', 'request_user_input', 'apply_patch', 'view_image'],
+  });
+  const calls = (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(calls[0].args, ['--version']);
   assert.equal(calls[1].stdin, prompt);
   assert.deepEqual(calls[1].args, result.metadata.argv);
@@ -185,7 +184,7 @@ test('Claude adapter sends stdin and unwraps structured_output', async () => {
     version: 'claude-tools-none-v1',
     tools: 'none',
   });
-  const calls = (await readFile(log, 'utf8')).trim().split('\n').map(JSON.parse);
+  const calls = (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(calls[1].stdin, 'Fictional case prompt.');
   assert.deepEqual(calls[1].args, result.metadata.argv);
   assert.equal(calls[1].args.includes('--bare'), false);
@@ -292,7 +291,8 @@ test('case task reads exactly one heldout record and keeps reference out of the 
   const task = await buildCaseTask({ home, id: 'heldout-1', runner: 'claude' });
   assert.match(task.prompt, /SELECTED_REFERENCE/);
   assert.doesNotMatch(task.prompt, /OTHER_REFERENCE/);
-  assert.equal(Object.hasOwn(task.schema.properties, 'reference'), false);
+  assert.equal(task.schema, CASE_SCHEMA);
+  assert.equal(Object.hasOwn(CASE_SCHEMA.properties, 'reference'), false);
   assert.equal(task.preview.recordsSent, 1);
   assert.deepEqual(task.preview.capabilityPolicy, capabilityPolicy('claude'));
 });
@@ -338,7 +338,7 @@ test('model-bound sample and template text rejects local image paths but permits
     () => buildProfilePrompt({
       platform: 'slack',
       records: [corpusRecord()],
-      template: 'Use /Users/example/private/photo.png as evidence.',
+      template: 'Use /home/example/private/photo.png as evidence.',
     }),
     /local image paths are not allowed/,
   );
@@ -383,15 +383,15 @@ test('runner failures are actionable for missing CLI, non-zero exit, malformed J
 
   await assert.rejects(
     runAgent({ ...base, binary: join(root, 'missing-cli') }),
-    (error) => error instanceof RunnerError && /was not found; install and authenticate/.test(error.message),
+    (error: unknown) => error instanceof RunnerError && /was not found; install and authenticate/.test(error.message),
   );
   await assert.rejects(
     runAgent({ ...base, binary: stub, env: { ...process.env, STUB_MODE: 'fail' } }),
-    (error) => error instanceof RunnerError && /exited with code 7: fictional authentication failure/.test(error.message),
+    (error: unknown) => error instanceof RunnerError && /exited with code 7: fictional authentication failure/.test(error.message),
   );
   await assert.rejects(
     runAgent({ ...base, binary: stub, env: { ...process.env, STUB_MODE: 'malformed' } }),
-    (error) => error instanceof RunnerError && /returned malformed JSON/.test(error.message),
+    (error: unknown) => error instanceof RunnerError && /returned malformed JSON/.test(error.message),
   );
   await assert.rejects(
     runAgent({
@@ -400,7 +400,7 @@ test('runner failures are actionable for missing CLI, non-zero exit, malformed J
       timeoutMs: 50,
       env: { ...process.env, STUB_MODE: 'hang' },
     }),
-    (error) => error instanceof RunnerError && /timed out after 50ms/.test(error.message),
+    (error: unknown) => error instanceof RunnerError && /timed out after 50ms/.test(error.message),
   );
   await assert.rejects(
     runAgent({
@@ -409,6 +409,6 @@ test('runner failures are actionable for missing CLI, non-zero exit, malformed J
       maxOutputBytes: 1024,
       env: { ...process.env, STUB_MODE: 'huge' },
     }),
-    (error) => error instanceof RunnerError && /output exceeded 1024 bytes/.test(error.message),
+    (error: unknown) => error instanceof RunnerError && /output exceeded 1024 bytes/.test(error.message),
   );
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -13,7 +13,9 @@ import {
   parseCandidateOutput,
   runEvaluation,
   runProcess,
-} from "../skills/evaluate-tone-of-voice/scripts/run-eval.mjs";
+  type EvalCase,
+  type EvaluationOptions,
+} from "../skills/evaluate-tone-of-voice/scripts/run-eval.ts";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(TEST_DIR, "fixtures/evaluation");
@@ -22,7 +24,13 @@ const PROFILES_DIR = join(FIXTURE_DIR, "profiles");
 const CASES = join(FIXTURE_DIR, "cases.jsonl");
 const REFERENCES = join(FIXTURE_DIR, "references.jsonl");
 
-async function makeStub(root, name = "codex") {
+interface StubCall {
+  args: string[];
+  input: string;
+  treatment: boolean;
+}
+
+async function makeStub(root: string, name = "codex"): Promise<string> {
   const path = join(root, name);
   const source = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -55,12 +63,16 @@ process.stdin.on("end", () => {
   return path;
 }
 
-async function readJsonl(path) {
+async function readJsonl<T>(path: string): Promise<T[]> {
   const source = await readFile(path, "utf8");
-  return source.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return source.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as T);
 }
 
-async function withStubEnvironment(root, callback) {
+async function readStubCalls(): Promise<StubCall[]> {
+  return readJsonl<StubCall>(process.env.TOV_STUB_LOG as string);
+}
+
+async function withStubEnvironment<T>(root: string, callback: () => Promise<T>): Promise<T> {
   const previous = {
     log: process.env.TOV_STUB_LOG,
     marker: process.env.TOV_STUB_MARKER,
@@ -81,7 +93,11 @@ async function withStubEnvironment(root, callback) {
   }
 }
 
-function options(root, binary, overrides = {}) {
+function options(
+  root: string,
+  binary: string,
+  overrides: Partial<EvaluationOptions> = {},
+): EvaluationOptions {
   return {
     casesPath: CASES,
     runtimeSkillPath: RUNTIME_SKILL,
@@ -109,7 +125,7 @@ test("generates matched baseline and treatment pairs without reference access", 
     await withStubEnvironment(root, async () => {
       const binary = await makeStub(root, "codex");
       const result = await runEvaluation(options(root, binary));
-      const calls = await readJsonl(process.env.TOV_STUB_LOG);
+      const calls = await readStubCalls();
       assert.equal(calls.length, 4);
 
       const references = await readFile(REFERENCES, "utf8");
@@ -145,8 +161,7 @@ test("generates matched baseline and treatment pairs without reference access", 
           "--skip-git-repo-check",
           "--output-schema",
         ]);
-        assert.ok(!baseline.args.includes("skill_search"));
-        const evalCase = JSON.parse((await readFile(CASES, "utf8")).trim().split("\n")[index / 2]);
+        const evalCase = JSON.parse((await readFile(CASES, "utf8")).trim().split("\n")[index / 2]) as EvalCase;
         const commonPrompt = buildCommonPrompt(evalCase);
         assert.ok(baseline.input.includes(commonPrompt));
         assert.ok(treatment.input.includes(commonPrompt));
@@ -158,7 +173,7 @@ test("generates matched baseline and treatment pairs without reference access", 
       assert.ok(calls[1].input.includes("SLACK_PROFILE_MARKER"));
       assert.ok(calls[3].input.includes("EMAIL_PROFILE_MARKER"));
 
-      const blind = await readJsonl(join(result.runDir, "blind-review.jsonl"));
+      const blind = await readJsonl<Record<string, unknown>>(join(result.runDir, "blind-review.jsonl"));
       const manifest = JSON.parse(await readFile(join(result.runDir, "manifest.json"), "utf8"));
       assert.equal(blind.length, 2);
       for (const row of blind) {
@@ -172,8 +187,7 @@ test("generates matched baseline and treatment pairs without reference access", 
           "candidateA",
           "candidateB",
         ]);
-        assert.ok(!Object.hasOwn(row, "mapping"));
-        assert.deepEqual(manifest.blindMapping[row.id], blindAssignment("fixed-seed", row.id));
+        assert.deepEqual(manifest.blindMapping[row.id as string], blindAssignment("fixed-seed", row.id as string));
       }
       assert.equal(manifest.status, "generated");
       assert.equal(manifest.runner.version, "codex test-1.0.0");
@@ -182,7 +196,6 @@ test("generates matched baseline and treatment pairs without reference access", 
         disabled: ["shell_tool", "apps", "multi_agent", "image_generation", "web_search", "skill_instructions"],
         residual: ["update_plan", "request_user_input", "apply_patch", "view_image"],
       });
-      assert.ok(!Object.hasOwn(manifest.config.generation, "tools"));
     });
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -198,12 +211,12 @@ test("resume preserves successful candidates after a failed branch", { concurren
       await assert.rejects(runEvaluation(options(root, binary, { seed: undefined })), /fictional transient failure/);
       delete process.env.TOV_FAIL_TREATMENT_ONCE;
       const resumed = await runEvaluation(options(root, binary, { seed: undefined, resume: true }));
-      const calls = await readJsonl(process.env.TOV_STUB_LOG);
+      const calls = await readStubCalls();
       assert.equal(calls.filter((call) => !call.treatment).length, 2);
       assert.equal(calls.filter((call) => call.treatment).length, 3);
       assert.equal(resumed.manifest.status, "generated");
       assert.equal(resumed.candidates.length, 2);
-      assert.match(resumed.manifest.config.seed, /^[a-f0-9]{32}$/);
+      assert.match(resumed.manifest.config.seed as string, /^[a-f0-9]{32}$/);
     });
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -223,15 +236,16 @@ test("claude adapter uses a clean structured session and never bare mode", { con
         runner: "claude",
         runId: "claude-run",
       }));
-      const [call] = await readJsonl(process.env.TOV_STUB_LOG);
+      const [call] = await readStubCalls();
       assert.ok(call.args.includes("--safe-mode"));
       assert.ok(call.args.includes("--no-session-persistence"));
       assert.ok(call.args.includes("--json-schema"));
       assert.ok(!call.args.includes("--bare"));
       assert.equal(call.args[call.args.indexOf("--tools") + 1], "");
-      assert.deepEqual(result.manifest.config.generation.capabilityPolicy, {
-        version: "claude-tools-none-v1",
-        tools: "none",
+      assert.deepEqual(result.manifest.config.generation, {
+        structuredOutput: true,
+        sessionPersistence: false,
+        capabilityPolicy: { version: "claude-tools-none-v1", tools: "none" },
       });
     });
   } finally {
@@ -252,7 +266,7 @@ test("rejects run identifiers that could escape the runs directory", async () =>
 });
 
 test("common prompt contains case facts but no case identifier or reference", async () => {
-  const [evalCase] = (await readFile(CASES, "utf8")).trim().split("\n").map(JSON.parse);
+  const [evalCase] = (await readFile(CASES, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as EvalCase);
   const prompt = buildCommonPrompt(evalCase);
   assert.ok(prompt.includes(evalCase.facts[0]));
   assert.ok(!prompt.includes(evalCase.id));
@@ -260,7 +274,7 @@ test("common prompt contains case facts but no case identifier or reference", as
 });
 
 test("encodes delimiter-like input as data and rejects local image paths", () => {
-  const evalCase = {
+  const evalCase: EvalCase = {
     id: "adversarial",
     platform: "slack",
     context: "dm",
@@ -279,18 +293,19 @@ test("encodes delimiter-like input as data and rejects local image paths", () =>
   assert.ok(!prompt.includes("<runtime-skill>"));
   assert.ok(prompt.lastIndexOf("Do not call any tool") > prompt.indexOf("call a tool"));
   assert.doesNotThrow(() => assertNoLocalImagePath("See https://example.com/public/photo.png", "test"));
-  assert.throws(() => assertNoLocalImagePath("Open /Users/example/private/photo.png", "test"), /local image paths are not allowed/);
-  assert.throws(() => assertNoLocalImagePath('Open "/Users/example/private/My Photo.png"', "test"), /local image paths are not allowed/);
+  assert.throws(() => assertNoLocalImagePath("Open /home/example/private/photo.png", "test"), /local image paths are not allowed/);
+  assert.throws(() => assertNoLocalImagePath('Open "/home/example/private/My Photo.png"', "test"), /local image paths are not allowed/);
   assert.throws(() => assertNoLocalImagePath("Open ../private/photo.webp", "test"), /local image paths are not allowed/);
 });
 
 test("resume rejects tampered candidate identity and metadata", { concurrency: false }, async () => {
-  for (const [name, mutate, expected] of [
+  const tampers: [string, (record: any) => void, RegExp][] = [
     ["identity", (record) => { record.platform = "email"; }, /identity, platform, or context was changed/],
     ["argv", (record) => { record.baseline.metadata.argv = ["unsafe"]; }, /argv does not match/],
     ["text", (record) => { record.baseline.text = "tampered output"; }, /text hash does not match/],
     ["branch", (record) => { delete record.baseline; }, /stored branch sequence is impossible/],
-  ]) {
+  ];
+  for (const [name, mutate, expected] of tampers) {
     const root = await mkdtemp(join(tmpdir(), `tone-eval-tamper-${name}-`));
     try {
       await withStubEnvironment(root, async () => {

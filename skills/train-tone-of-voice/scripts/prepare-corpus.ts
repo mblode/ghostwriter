@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import {
   constants as fsConstants,
   copyFile,
@@ -16,6 +14,36 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+
+export interface CorpusRecord {
+  id: string;
+  platform: string;
+  context: string;
+  group: string;
+  text: string;
+  timestamp?: string;
+}
+
+export interface CaseRecord {
+  id: string;
+  platform: string;
+  context: string;
+  scenario: string;
+  facts: string[];
+  constraints: string[];
+}
+
+export interface ReferenceRecord {
+  id: string;
+  reference: string;
+}
+
+export interface RecordLocation {
+  source?: string;
+  lineNumber?: number;
+}
+
+export type Validator<T> = (record: unknown, location: RecordLocation) => T;
 
 export const CORPUS_FIELDS = Object.freeze([
   'id',
@@ -62,29 +90,58 @@ const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 export class UserInputError extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = 'UserInputError';
   }
 }
 
+export interface RollbackReport {
+  restored: string[];
+  removed: string[];
+  failures: { name: string; message: string }[];
+}
+
+export interface TransactionDetails {
+  backups?: Record<string, string | null>;
+  rollback?: RollbackReport;
+}
+
 export class TransactionError extends Error {
-  constructor(message, details = {}, cause) {
+  details: TransactionDetails;
+
+  constructor(message: string, details: TransactionDetails = {}, cause?: unknown) {
     super(message, cause ? { cause } : undefined);
     this.name = 'TransactionError';
     this.details = details;
   }
 }
 
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function location(source, lineNumber) {
+export function errorCode(error: unknown): string | undefined {
+  return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+}
+
+function asRecord(value: unknown, source: string, lineNumber?: number): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new UserInputError(`${location(source, lineNumber)}: expected a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function location(source: string, lineNumber?: number): string {
   return lineNumber ? `${source}:${lineNumber}` : source;
 }
 
-function rejectUnknownFields(record, allowedFields, source, lineNumber) {
+function rejectUnknownFields(
+  record: Record<string, unknown>,
+  allowedFields: readonly string[],
+  source: string,
+  lineNumber?: number,
+): void {
   const unknown = Object.keys(record).filter((key) => !allowedFields.includes(key));
   if (unknown.length > 0) {
     throw new UserInputError(
@@ -93,7 +150,13 @@ function rejectUnknownFields(record, allowedFields, source, lineNumber) {
   }
 }
 
-function requireString(record, field, source, lineNumber, { max = 20_000 } = {}) {
+function requireString(
+  record: Record<string, unknown>,
+  field: string,
+  source: string,
+  lineNumber: number | undefined,
+  { max = 20_000 }: { max?: number } = {},
+): string {
   const value = record[field];
   if (typeof value !== 'string' || value.trim() === '') {
     throw new UserInputError(`${location(source, lineNumber)}: ${field} must be a non-empty string`);
@@ -107,7 +170,7 @@ function requireString(record, field, source, lineNumber, { max = 20_000 } = {})
   return value;
 }
 
-function validateIdentifier(value, field, source, lineNumber) {
+function validateIdentifier(value: string, field: string, source: string, lineNumber?: number): void {
   if (!SAFE_IDENTIFIER.test(value)) {
     throw new UserInputError(
       `${location(source, lineNumber)}: ${field} must use only letters, numbers, dot, underscore, colon, or hyphen (maximum 128 characters)`,
@@ -115,7 +178,7 @@ function validateIdentifier(value, field, source, lineNumber) {
   }
 }
 
-export function validatePlatform(value, source = 'platform', lineNumber) {
+export function validatePlatform(value: unknown, source = 'platform', lineNumber?: number): void {
   if (typeof value !== 'string' || !SAFE_SLUG.test(value) || value.length > 64) {
     throw new UserInputError(
       `${location(source, lineNumber)}: platform must be a lowercase kebab-case slug of at most 64 characters`,
@@ -123,7 +186,7 @@ export function validatePlatform(value, source = 'platform', lineNumber) {
   }
 }
 
-function validateContext(value, source, lineNumber) {
+function validateContext(value: string, source: string, lineNumber?: number): void {
   if (!SAFE_SLUG.test(value) || value.length > 64) {
     throw new UserInputError(
       `${location(source, lineNumber)}: context must be a lowercase kebab-case slug of at most 64 characters`,
@@ -131,10 +194,11 @@ function validateContext(value, source, lineNumber) {
   }
 }
 
-export function validateRecord(record, { source = 'input', lineNumber } = {}) {
-  if (!isPlainObject(record)) {
-    throw new UserInputError(`${location(source, lineNumber)}: expected a JSON object`);
-  }
+export function validateRecord(
+  value: unknown,
+  { source = 'input', lineNumber }: RecordLocation = {},
+): CorpusRecord {
+  const record = asRecord(value, source, lineNumber);
   rejectUnknownFields(record, CORPUS_FIELDS, source, lineNumber);
 
   const id = requireString(record, 'id', source, lineNumber, { max: 128 });
@@ -148,29 +212,31 @@ export function validateRecord(record, { source = 'input', lineNumber } = {}) {
   validatePlatform(platform, source, lineNumber);
   validateContext(context, source, lineNumber);
 
-  let timestamp;
-  if (record.timestamp !== undefined) {
-    timestamp = requireString(record, 'timestamp', source, lineNumber, { max: 64 });
-    if (!ISO_TIMESTAMP.test(timestamp) || Number.isNaN(Date.parse(timestamp))) {
-      throw new UserInputError(
-        `${location(source, lineNumber)}: timestamp must be ISO 8601 and include a timezone`,
-      );
-    }
-  }
+  if (record.timestamp === undefined) return { id, platform, context, group, text };
 
-  return timestamp === undefined
-    ? { id, platform, context, group, text }
-    : { id, platform, context, group, text, timestamp };
+  const timestamp = requireString(record, 'timestamp', source, lineNumber, { max: 64 });
+  if (!ISO_TIMESTAMP.test(timestamp) || Number.isNaN(Date.parse(timestamp))) {
+    throw new UserInputError(
+      `${location(source, lineNumber)}: timestamp must be ISO 8601 and include a timezone`,
+    );
+  }
+  return { id, platform, context, group, text, timestamp };
 }
 
-export function parseJsonl(content, { source = 'input', validate = validateRecord } = {}) {
-  if (typeof content !== 'string' || content.length === 0) {
+export function parseJsonl<T extends { id: string } = CorpusRecord>(
+  content: string,
+  {
+    source = 'input',
+    validate = validateRecord as unknown as Validator<T>,
+  }: { source?: string; validate?: Validator<T> } = {},
+): T[] {
+  if (content.length === 0) {
     throw new UserInputError(`${source}: expected non-empty UTF-8 JSONL`);
   }
 
   const lines = content.replace(/^\uFEFF/, '').split('\n');
-  const records = [];
-  const seenIds = new Set();
+  const records: T[] = [];
+  const seenIds = new Set<string>();
 
   for (let index = 0; index < lines.length; index += 1) {
     const lineNumber = index + 1;
@@ -180,11 +246,11 @@ export function parseJsonl(content, { source = 'input', validate = validateRecor
       throw new UserInputError(`${source}:${lineNumber}: blank lines are not allowed in JSONL`);
     }
 
-    let parsed;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(line);
     } catch (error) {
-      throw new UserInputError(`${source}:${lineNumber}: invalid JSON (${error.message})`);
+      throw new UserInputError(`${source}:${lineNumber}: invalid JSON (${errorMessage(error)})`);
     }
 
     const record = validate(parsed, { source, lineNumber });
@@ -201,7 +267,7 @@ export function parseJsonl(content, { source = 'input', validate = validateRecor
   return records;
 }
 
-function splitHash(seed, platform, group) {
+function splitHash(seed: string, platform: string, group: string): string {
   return createHash('sha256')
     .update(seed)
     .update('\0')
@@ -211,11 +277,11 @@ function splitHash(seed, platform, group) {
     .digest('hex');
 }
 
-function groupKey(record) {
+function groupKey(record: CorpusRecord): string {
   return `${record.platform}\0${record.group}`;
 }
 
-export function assertDisjoint(train, heldout) {
+export function assertDisjoint(train: CorpusRecord[], heldout: CorpusRecord[]): void {
   const trainIds = new Set(train.map((record) => record.id));
   const trainGroups = new Set(train.map(groupKey));
 
@@ -231,21 +297,36 @@ export function assertDisjoint(train, heldout) {
   }
 }
 
-export function splitByGroup(records, seed) {
-  if (typeof seed !== 'string' || seed.trim() === '') {
-    throw new UserInputError('seed must be a non-empty string');
-  }
+export interface PlatformCounts {
+  records: number;
+  groups: number;
+  trainGroups: number;
+  heldoutGroups: number;
+  contexts: string[];
+  trainRecords?: number;
+  heldoutRecords?: number;
+}
 
-  const platformGroups = new Map();
+export interface SplitResult {
+  train: CorpusRecord[];
+  heldout: CorpusRecord[];
+  platforms: Record<string, PlatformCounts>;
+}
+
+export function splitByGroup(records: CorpusRecord[], seed: string): SplitResult {
+  if (seed.trim() === '') throw new UserInputError('seed must be a non-empty string');
+
+  const platformGroups = new Map<string, Set<string>>();
   for (const record of records) {
-    if (!platformGroups.has(record.platform)) platformGroups.set(record.platform, new Set());
-    platformGroups.get(record.platform).add(record.group);
+    const groups = platformGroups.get(record.platform) ?? new Set<string>();
+    groups.add(record.group);
+    platformGroups.set(record.platform, groups);
   }
 
-  const heldoutGroups = new Set();
-  const platforms = {};
+  const heldoutGroups = new Set<string>();
+  const platforms: Record<string, PlatformCounts> = {};
   for (const platform of [...platformGroups.keys()].sort()) {
-    const groups = [...platformGroups.get(platform)];
+    const groups = [...platformGroups.get(platform)!];
     if (groups.length < 2) {
       throw new UserInputError(
         `platform ${JSON.stringify(platform)} has ${groups.length} group; at least 2 are required for a disjoint split`,
@@ -267,14 +348,13 @@ export function splitByGroup(records, seed) {
       heldoutGroups.add(`${platform}\0${group}`);
     }
 
+    const platformRecords = records.filter((record) => record.platform === platform);
     platforms[platform] = {
-      records: records.filter((record) => record.platform === platform).length,
+      records: platformRecords.length,
       groups: groups.length,
       trainGroups: groups.length - heldoutCount,
       heldoutGroups: heldoutCount,
-      contexts: [...new Set(
-        records.filter((record) => record.platform === platform).map((record) => record.context),
-      )].sort(),
+      contexts: [...new Set(platformRecords.map((record) => record.context))].sort(),
     };
   }
 
@@ -290,20 +370,20 @@ export function splitByGroup(records, seed) {
   return { train, heldout, platforms };
 }
 
-export function serializeJsonl(records) {
+export function serializeJsonl(records: unknown[]): string {
   return `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
 }
 
-export function sha256(content) {
+export function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-export function resolveDataHome(explicitHome) {
+export function resolveDataHome(explicitHome?: string): string {
   const candidate = explicitHome || process.env.TONE_OF_VOICE_HOME || join(homedir(), '.config', 'tone-of-voice');
   return resolve(candidate);
 }
 
-export function confinedPath(home, ...parts) {
+export function confinedPath(home: string, ...parts: string[]): string {
   const root = resolve(home);
   const target = resolve(root, ...parts);
   const fromRoot = relative(root, target);
@@ -313,17 +393,21 @@ export function confinedPath(home, ...parts) {
   return target;
 }
 
-async function pathExists(path) {
+async function pathExists(path: string): Promise<boolean> {
   try {
     await lstat(path);
     return true;
   } catch (error) {
-    if (error.code === 'ENOENT') return false;
+    if (errorCode(error) === 'ENOENT') return false;
     throw error;
   }
 }
 
-export async function assertPhysicalConfinement(home, target, { createRoot = false } = {}) {
+export async function assertPhysicalConfinement(
+  home: string,
+  target: string,
+  { createRoot = false }: { createRoot?: boolean } = {},
+): Promise<void> {
   const lexical = confinedPath(home, relative(resolve(home), resolve(target)));
   if (createRoot) await mkdir(home, { recursive: true, mode: 0o700 });
   if (!(await pathExists(home))) {
@@ -344,11 +428,15 @@ export async function assertPhysicalConfinement(home, target, { createRoot = fal
   }
 }
 
-function backupStamp(now = new Date()) {
+function backupStamp(now = new Date()): string {
   return `${now.toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
 }
 
-export async function backupIfPresent(home, target, stamp = backupStamp()) {
+export async function backupIfPresent(
+  home: string,
+  target: string,
+  stamp = backupStamp(),
+): Promise<string | null> {
   const root = resolve(home);
   const resolvedTarget = confinedPath(root, relative(root, resolve(target)));
   await assertPhysicalConfinement(root, resolvedTarget, { createRoot: true });
@@ -366,12 +454,14 @@ export async function backupIfPresent(home, target, stamp = backupStamp()) {
   return backup;
 }
 
+type RenameImpl = (from: string, to: string) => Promise<void>;
+
 export async function writeAtomically(
-  home,
-  target,
-  content,
-  { renameImpl = rename } = {},
-) {
+  home: string,
+  target: string,
+  content: string,
+  { renameImpl = rename as RenameImpl }: { renameImpl?: RenameImpl } = {},
+): Promise<void> {
   const root = resolve(home);
   const resolvedTarget = confinedPath(root, relative(root, resolve(target)));
   await assertPhysicalConfinement(root, resolvedTarget, { createRoot: true });
@@ -390,7 +480,11 @@ export async function writeAtomically(
   }
 }
 
-async function stageWrite(home, target, content) {
+async function stageWrite(
+  home: string,
+  target: string,
+  content: string,
+): Promise<{ target: string; temporary: string }> {
   const root = resolve(home);
   const resolvedTarget = confinedPath(root, relative(root, resolve(target)));
   await assertPhysicalConfinement(root, resolvedTarget, { createRoot: true });
@@ -411,7 +505,11 @@ async function stageWrite(home, target, content) {
   return { target: resolvedTarget, temporary };
 }
 
-async function restoreFromBackup(target, backup, rollbackRenameImpl) {
+async function restoreFromBackup(
+  target: string,
+  backup: string,
+  rollbackRenameImpl: RenameImpl,
+): Promise<void> {
   const restoreTemporary = join(
     dirname(target),
     `.${basename(target)}.${process.pid}.${randomUUID()}.restore`,
@@ -424,40 +522,46 @@ async function restoreFromBackup(target, backup, rollbackRenameImpl) {
   }
 }
 
+export interface TransactionEntry {
+  name: string;
+  target: string;
+  content: string;
+}
+
+export interface TransactionOptions {
+  now?: Date;
+  renameImpl?: RenameImpl;
+  rollbackRenameImpl?: RenameImpl;
+}
+
 export async function writeSetTransactionally(
-  home,
-  entries,
+  home: string,
+  entries: TransactionEntry[],
   {
     now = new Date(),
-    renameImpl = rename,
-    rollbackRenameImpl = rename,
-  } = {},
-) {
-  if (!Array.isArray(entries) || entries.length < 2) {
+    renameImpl = rename as RenameImpl,
+    rollbackRenameImpl = rename as RenameImpl,
+  }: TransactionOptions = {},
+): Promise<{ backups: Record<string, string | null> }> {
+  if (entries.length < 2) {
     throw new UserInputError('transaction requires at least two destination entries');
   }
   const root = resolve(home);
-  const names = new Set();
-  const targets = new Set();
+  const names = new Set<string>();
+  const targets = new Set<string>();
   for (const entry of entries) {
-    if (!entry || typeof entry.name !== 'string' || entry.name === '') {
-      throw new UserInputError('every transaction entry requires a name');
-    }
     if (names.has(entry.name)) throw new UserInputError(`duplicate transaction name ${JSON.stringify(entry.name)}`);
     names.add(entry.name);
     const target = confinedPath(root, relative(root, resolve(entry.target)));
     if (targets.has(target)) throw new UserInputError(`duplicate transaction target ${target}`);
     targets.add(target);
-    if (typeof entry.content !== 'string') {
-      throw new UserInputError(`transaction content for ${entry.name} must be a string`);
-    }
   }
 
-  const staged = [];
-  const backups = {};
-  const existed = {};
-  const committed = [];
-  const rollback = { restored: [], removed: [], failures: [] };
+  const staged: { entry: TransactionEntry; target: string; temporary: string }[] = [];
+  const backups: Record<string, string | null> = {};
+  const existed: Record<string, boolean> = {};
+  const committed: typeof staged = [];
+  const rollback: RollbackReport = { restored: [], removed: [], failures: [] };
 
   try {
     for (const entry of entries) {
@@ -479,21 +583,21 @@ export async function writeSetTransactionally(
     for (const item of [...committed].reverse()) {
       try {
         if (existed[item.entry.name]) {
-          await restoreFromBackup(item.target, backups[item.entry.name], rollbackRenameImpl);
+          await restoreFromBackup(item.target, backups[item.entry.name]!, rollbackRenameImpl);
           rollback.restored.push(item.entry.name);
         } else {
           await rm(item.target, { force: true });
           rollback.removed.push(item.entry.name);
         }
       } catch (rollbackError) {
-        rollback.failures.push({ name: item.entry.name, message: rollbackError.message });
+        rollback.failures.push({ name: item.entry.name, message: errorMessage(rollbackError) });
       }
     }
     const suffix = rollback.failures.length
       ? `; rollback failed for ${rollback.failures.map((item) => item.name).join(', ')}`
       : '; prior generation restored';
     throw new TransactionError(
-      `transactional write failed: ${error.message}${suffix}`,
+      `transactional write failed: ${errorMessage(error)}${suffix}`,
       { backups, rollback },
       error,
     );
@@ -502,14 +606,12 @@ export async function writeSetTransactionally(
   }
 }
 
-async function readLimited(path, maximum = MAX_INPUT_BYTES) {
+async function readLimited(path: string, maximum = MAX_INPUT_BYTES): Promise<string> {
   let details;
   try {
     details = await stat(path);
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      throw new UserInputError(`input file not found: ${path}`);
-    }
+    if (errorCode(error) === 'ENOENT') throw new UserInputError(`input file not found: ${path}`);
     throw error;
   }
   if (!details.isFile()) throw new UserInputError(`input must be a regular file: ${path}`);
@@ -519,7 +621,33 @@ async function readLimited(path, maximum = MAX_INPUT_BYTES) {
   return readFile(path, 'utf8');
 }
 
-export async function buildCorpusPlan({ input, home, seed = 'v1' }) {
+export interface CorpusPreview {
+  kind: 'corpus';
+  seed: string;
+  source: { path: string; sha256: string; records: number };
+  destinations: { train: string; heldout: string; manifest: string };
+  split: {
+    algorithm: string;
+    trainRecords: number;
+    heldoutRecords: number;
+    platforms: Record<string, PlatformCounts>;
+    trainSha256: string;
+    heldoutSha256: string;
+  };
+}
+
+export interface CorpusPlan {
+  home: string;
+  sourcePath: string;
+  trainText: string;
+  heldoutText: string;
+  destinations: { train: string; heldout: string; manifest: string };
+  preview: CorpusPreview;
+}
+
+export async function buildCorpusPlan(
+  { input, home, seed = 'v1' }: { input?: string; home?: string; seed?: string },
+): Promise<CorpusPlan> {
   if (!input) throw new UserInputError('corpus requires --input');
   const sourcePath = resolve(input);
   const dataHome = resolveDataHome(home);
@@ -557,10 +685,8 @@ export async function buildCorpusPlan({ input, home, seed = 'v1' }) {
   };
 }
 
-export async function executeCorpusPlan(
-  plan,
-  { now = new Date(), renameImpl = rename, rollbackRenameImpl = rename } = {},
-) {
+export async function executeCorpusPlan(plan: CorpusPlan, options: TransactionOptions = {}) {
+  const now = options.now ?? new Date();
   const manifest = {
     version: 1,
     createdAt: now.toISOString(),
@@ -577,11 +703,11 @@ export async function executeCorpusPlan(
       target: plan.destinations.manifest,
       content: `${JSON.stringify(manifest, null, 2)}\n`,
     },
-  ], { now, renameImpl, rollbackRenameImpl });
-  return { ...plan.preview, status: 'executed', backups: transaction.backups };
+  ], { ...options, now });
+  return { ...plan.preview, status: 'executed' as const, backups: transaction.backups };
 }
 
-function extractSection(markdown, heading) {
+function extractSection(markdown: string, heading: string): string {
   const lines = markdown.split(/\r?\n/);
   const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
   if (start < 0) return '';
@@ -590,8 +716,11 @@ function extractSection(markdown, heading) {
   return lines.slice(start + 1, end).join('\n').trim();
 }
 
-export function validateProfile(markdown, { source = 'profile', heldout = [] } = {}) {
-  if (typeof markdown !== 'string' || markdown.trim() === '') {
+export function validateProfile(
+  markdown: string,
+  { source = 'profile', heldout = [] }: { source?: string; heldout?: { id: string; text: string }[] } = {},
+): string {
+  if (markdown.trim() === '') {
     throw new UserInputError(`${source}: profile must be non-empty Markdown`);
   }
   if (Buffer.byteLength(markdown) > MAX_PROFILE_BYTES) {
@@ -604,10 +733,12 @@ export function validateProfile(markdown, { source = 'profile', heldout = [] } =
     }
   }
 
-  const email = markdown.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
-  if (email) throw new UserInputError(`${source}: possible email address must be redacted`);
-  const phone = markdown.match(/(?:\+?\d[\d ()-]{8,}\d)/);
-  if (phone) throw new UserInputError(`${source}: possible phone number must be redacted`);
+  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(markdown)) {
+    throw new UserInputError(`${source}: possible email address must be redacted`);
+  }
+  if (/(?:\+?\d[\d ()-]{8,}\d)/.test(markdown)) {
+    throw new UserInputError(`${source}: possible phone number must be redacted`);
+  }
 
   const excerpts = extractSection(markdown, 'Redacted excerpts')
     .split('\n')
@@ -631,9 +762,25 @@ export function validateProfile(markdown, { source = 'profile', heldout = [] } =
   return markdown;
 }
 
-export async function buildProfilePlan({ input, platform, home }) {
+export interface ProfilePlan {
+  home: string;
+  markdown: string;
+  destination: string;
+  preview: {
+    kind: 'profile';
+    platform: string;
+    source: { path: string; sha256: string };
+    destination: string;
+    heldoutRecordsChecked: number;
+    requiredHeadings: readonly string[];
+  };
+}
+
+export async function buildProfilePlan(
+  { input, platform, home }: { input?: string; platform?: string; home?: string },
+): Promise<ProfilePlan> {
   if (!input) throw new UserInputError('profile requires --input');
-  validatePlatform(platform, 'profile', undefined);
+  validatePlatform(platform, 'profile');
   const sourcePath = resolve(input);
   const dataHome = resolveDataHome(home);
   const markdown = await readLimited(sourcePath, MAX_PROFILE_BYTES);
@@ -650,7 +797,7 @@ export async function buildProfilePlan({ input, platform, home }) {
     destination,
     preview: {
       kind: 'profile',
-      platform,
+      platform: platform as string,
       source: { path: sourcePath, sha256: sha256(markdown) },
       destination,
       heldoutRecordsChecked: heldout.length,
@@ -659,29 +806,39 @@ export async function buildProfilePlan({ input, platform, home }) {
   };
 }
 
-export async function executeProfilePlan(plan, { now = new Date() } = {}) {
+export async function executeProfilePlan(plan: ProfilePlan, { now = new Date() }: { now?: Date } = {}) {
   const backup = await backupIfPresent(plan.home, plan.destination, backupStamp(now));
   await writeAtomically(plan.home, plan.destination, plan.markdown);
-  return { ...plan.preview, status: 'executed', backup };
+  return { ...plan.preview, status: 'executed' as const, backup };
 }
 
-function validateStringArray(record, field, source, lineNumber, { allowEmpty = false } = {}) {
-  if (!Array.isArray(record[field]) || (!allowEmpty && record[field].length === 0)) {
+function validateStringArray(
+  record: Record<string, unknown>,
+  field: string,
+  source: string,
+  lineNumber: number | undefined,
+  { allowEmpty = false }: { allowEmpty?: boolean } = {},
+): string[] {
+  const value = record[field];
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
     const requirement = allowEmpty ? 'a string array' : 'a non-empty string array';
     throw new UserInputError(`${location(source, lineNumber)}: ${field} must be ${requirement}`);
   }
-  return record[field].map((value, index) => {
-    if (typeof value !== 'string' || value.trim() === '') {
+  return value.map((item, index) => {
+    if (typeof item !== 'string' || item.trim() === '') {
       throw new UserInputError(
         `${location(source, lineNumber)}: ${field}[${index}] must be a non-empty string`,
       );
     }
-    return value;
+    return item;
   });
 }
 
-export function validateCase(record, { source = 'cases', lineNumber } = {}) {
-  if (!isPlainObject(record)) throw new UserInputError(`${location(source, lineNumber)}: expected a JSON object`);
+export function validateCase(
+  value: unknown,
+  { source = 'cases', lineNumber }: RecordLocation = {},
+): CaseRecord {
+  const record = asRecord(value, source, lineNumber);
   rejectUnknownFields(record, CASE_FIELDS, source, lineNumber);
   const id = requireString(record, 'id', source, lineNumber, { max: 128 });
   const platform = requireString(record, 'platform', source, lineNumber, { max: 64 });
@@ -700,8 +857,11 @@ export function validateCase(record, { source = 'cases', lineNumber } = {}) {
   };
 }
 
-export function validateReference(record, { source = 'references', lineNumber } = {}) {
-  if (!isPlainObject(record)) throw new UserInputError(`${location(source, lineNumber)}: expected a JSON object`);
+export function validateReference(
+  value: unknown,
+  { source = 'references', lineNumber }: RecordLocation = {},
+): ReferenceRecord {
+  const record = asRecord(value, source, lineNumber);
   rejectUnknownFields(record, REFERENCE_FIELDS, source, lineNumber);
   const id = requireString(record, 'id', source, lineNumber, { max: 128 });
   const reference = requireString(record, 'reference', source, lineNumber, { max: MAX_TEXT_CHARACTERS });
@@ -709,7 +869,24 @@ export function validateReference(record, { source = 'references', lineNumber } 
   return { id, reference };
 }
 
-export async function buildEvalPlan({ cases, references, home }) {
+export interface EvalPlan {
+  home: string;
+  caseText: string;
+  referenceText: string;
+  destinations: { cases: string; references: string };
+  preview: {
+    kind: 'eval';
+    cases: { path: string; records: number; sha256: string };
+    references: { path: string; records: number; sha256: string };
+    heldout: { path: string; records: number; sha256: string };
+    destinations: { cases: string; references: string };
+    warnings: string[];
+  };
+}
+
+export async function buildEvalPlan(
+  { cases, references, home }: { cases?: string; references?: string; home?: string },
+): Promise<EvalPlan> {
   if (!cases || !references) throw new UserInputError('eval requires --cases and --references');
   const casePath = resolve(cases);
   const referencePath = resolve(references);
@@ -747,7 +924,7 @@ export async function buildEvalPlan({ cases, references, home }) {
         `case ${JSON.stringify(caseRecord.id)} platform/context does not match corpus/heldout.jsonl`,
       );
     }
-    if (referenceById.get(caseRecord.id).reference !== heldoutRecord.text) {
+    if (referenceById.get(caseRecord.id)!.reference !== heldoutRecord.text) {
       throw new UserInputError(
         `reference ${JSON.stringify(caseRecord.id)} does not exactly match corpus/heldout.jsonl`,
       );
@@ -778,23 +955,32 @@ export async function buildEvalPlan({ cases, references, home }) {
   };
 }
 
-export async function executeEvalPlan(
-  plan,
-  { now = new Date(), renameImpl = rename, rollbackRenameImpl = rename } = {},
-) {
+export async function executeEvalPlan(plan: EvalPlan, options: TransactionOptions = {}) {
   const transaction = await writeSetTransactionally(plan.home, [
     { name: 'cases', target: plan.destinations.cases, content: plan.caseText },
     { name: 'references', target: plan.destinations.references, content: plan.referenceText },
-  ], { now, renameImpl, rollbackRenameImpl });
-  return { ...plan.preview, status: 'executed', backups: transaction.backups };
+  ], options);
+  return { ...plan.preview, status: 'executed' as const, backups: transaction.backups };
 }
 
-function parseArguments(argv) {
+interface CliOptions {
+  command: 'corpus' | 'profile' | 'eval';
+  mode: 'dry-run' | 'execute';
+  confirmWrite: boolean;
+  input?: string;
+  home?: string;
+  seed?: string;
+  platform?: string;
+  cases?: string;
+  references?: string;
+}
+
+function parseArguments(argv: string[]): CliOptions {
   const [command = 'corpus', ...rest] = argv;
   if (!['corpus', 'profile', 'eval'].includes(command)) {
     throw new UserInputError(`unknown command ${JSON.stringify(command)}; expected corpus, profile, or eval`);
   }
-  const values = { command, mode: 'dry-run', confirmWrite: false };
+  const values: Record<string, string | boolean> = { command, mode: 'dry-run', confirmWrite: false };
   const valueFlags = new Set([
     '--input', '--home', '--seed', '--mode', '--platform', '--cases', '--references',
   ]);
@@ -808,44 +994,44 @@ function parseArguments(argv) {
     const value = rest[index + 1];
     if (!value || value.startsWith('--')) throw new UserInputError(`${flag} requires a value`);
     index += 1;
-    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
     values[key] = value;
   }
-  if (!['dry-run', 'execute'].includes(values.mode)) {
+  if (!['dry-run', 'execute'].includes(values.mode as string)) {
     throw new UserInputError('--mode must be dry-run or execute');
   }
   if (values.mode === 'execute' && !values.confirmWrite) {
     throw new UserInputError('execute mode requires --confirm-write after reviewing a dry run');
   }
-  return values;
+  return values as unknown as CliOptions;
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const options = parseArguments(argv);
-  let plan;
-  let execute;
-  if (options.command === 'corpus') {
-    plan = await buildCorpusPlan(options);
-    execute = executeCorpusPlan;
-  } else if (options.command === 'profile') {
-    plan = await buildProfilePlan(options);
-    execute = executeProfilePlan;
-  } else {
-    plan = await buildEvalPlan(options);
-    execute = executeEvalPlan;
-  }
+async function runCommand<P extends { preview: object }>(
+  plan: P,
+  mode: 'dry-run' | 'execute',
+  execute: (plan: P) => Promise<object>,
+): Promise<object> {
+  return mode === 'execute' ? execute(plan) : { ...plan.preview, status: 'dry-run' };
+}
 
-  const result = options.mode === 'execute'
-    ? await execute(plan)
-    : { ...plan.preview, status: 'dry-run' };
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  const options = parseArguments(argv);
+  let result: object;
+  if (options.command === 'corpus') {
+    result = await runCommand(await buildCorpusPlan(options), options.mode, executeCorpusPlan);
+  } else if (options.command === 'profile') {
+    result = await runCommand(await buildProfilePlan(options), options.mode, executeProfilePlan);
+  } else {
+    result = await runCommand(await buildEvalPlan(options), options.mode, executeEvalPlan);
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
 if (invokedPath && fileURLToPath(import.meta.url) === invokedPath) {
-  main().catch((error) => {
+  main().catch((error: unknown) => {
     const prefix = error instanceof UserInputError ? 'prepare-corpus' : 'prepare-corpus: unexpected error';
-    process.stderr.write(`${prefix}: ${error.message}\n`);
+    process.stderr.write(`${prefix}: ${errorMessage(error)}\n`);
     process.exitCode = 1;
   });
 }

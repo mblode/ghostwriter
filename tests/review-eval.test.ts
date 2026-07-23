@@ -10,14 +10,16 @@ import {
   renderReport,
   reviewEvaluation,
   summarizeLabels,
-} from "../skills/evaluate-tone-of-voice/scripts/review-eval.mjs";
+  type BlindRow,
+  type Label,
+} from "../skills/evaluate-tone-of-voice/scripts/review-eval.ts";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(TEST_DIR, "fixtures/evaluation");
 const REFERENCES = join(FIXTURE_DIR, "references.jsonl");
 const CHOICES = join(FIXTURE_DIR, "choices.jsonl");
 
-const BLIND_ROWS = [
+const BLIND_ROWS: BlindRow[] = [
   {
     id: "slack-001",
     platform: "slack",
@@ -40,7 +42,7 @@ const BLIND_ROWS = [
   },
 ];
 
-async function createRun(root) {
+async function createRun(root: string): Promise<string> {
   const runDir = join(root, "run");
   await mkdir(runDir);
   const manifest = {
@@ -55,12 +57,17 @@ async function createRun(root) {
     artifacts: { candidates: "candidates.jsonl", blindReview: "blind-review.jsonl" },
   };
   await writeFile(join(runDir, "manifest.json"), `${JSON.stringify(manifest)}\n`);
-  await writeFile(join(runDir, "blind-review.jsonl"), `${BLIND_ROWS.map(JSON.stringify).join("\n")}\n`);
+  await writeFile(join(runDir, "blind-review.jsonl"), `${BLIND_ROWS.map((row) => JSON.stringify(row)).join("\n")}\n`);
   return runDir;
 }
 
+async function readJsonl<T>(path: string): Promise<T[]> {
+  const source = await readFile(path, "utf8");
+  return source.trim().split("\n").map((line) => JSON.parse(line) as T);
+}
+
 test("maps blind choices only after review", () => {
-  const mapping = { a: "treatment", b: "baseline" };
+  const mapping = { a: "treatment", b: "baseline" } as const;
   assert.equal(choiceToOutcome("a", mapping), "treatment-win");
   assert.equal(choiceToOutcome("b", mapping), "baseline-win");
   assert.equal(choiceToOutcome("tie", mapping), "tie");
@@ -107,7 +114,7 @@ test("persists each label and resumes an interrupted review", async () => {
       reviewEvaluation({ runDir, referencesPath: REFERENCES, labelsInputPath: firstChoice, interactive: false }),
       /no label supplied for case "email-001"/,
     );
-    const persisted = (await readFile(join(runDir, "labels.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    const persisted = await readJsonl<Label>(join(runDir, "labels.jsonl"));
     assert.equal(persisted.length, 1);
     assert.equal(persisted[0].outcome, "tie");
 
@@ -131,7 +138,7 @@ test("persists each label and resumes an interrupted review", async () => {
 });
 
 test("report arithmetic includes every outcome and sorts platforms", () => {
-  const labels = [
+  const labels: Pick<Label, "id" | "platform" | "outcome">[] = [
     { id: "1", platform: "slack", outcome: "treatment-win" },
     { id: "2", platform: "email", outcome: "baseline-win" },
     { id: "3", platform: "slack", outcome: "tie" },
@@ -216,9 +223,9 @@ test("rejects tampered stored label metadata and blind mappings", async () => {
     const runDir = await createRun(root);
     await reviewEvaluation({ runDir, referencesPath: REFERENCES, labelsInputPath: CHOICES, interactive: false });
     const labelsPath = join(runDir, "labels.jsonl");
-    const labels = (await readFile(labelsPath, "utf8")).trim().split("\n").map(JSON.parse);
+    const labels = await readJsonl<Label>(labelsPath);
     labels[0].outcome = "baseline-win";
-    await writeFile(labelsPath, `${labels.map(JSON.stringify).join("\n")}\n`);
+    await writeFile(labelsPath, `${labels.map((label) => JSON.stringify(label)).join("\n")}\n`);
     await assert.rejects(
       reviewEvaluation({ runDir, referencesPath: REFERENCES, labelsInputPath: CHOICES, interactive: false }),
       /outcome does not match/,

@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { createHash, randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -7,8 +5,12 @@ import { lstat, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CHOICES = new Set(["a", "b", "tie", "invalid"]);
-const OUTCOMES = new Set(["treatment-win", "baseline-win", "tie", "invalid"]);
+export type Choice = "a" | "b" | "tie" | "invalid";
+export type Outcome = "treatment-win" | "baseline-win" | "tie" | "invalid";
+export type Branch = "baseline" | "treatment";
+
+const CHOICES = new Set<string>(["a", "b", "tie", "invalid"]);
+const OUTCOMES = new Set<string>(["treatment-win", "baseline-win", "tie", "invalid"]);
 const BLIND_FIELDS = new Set([
   "id",
   "platform",
@@ -20,12 +22,47 @@ const BLIND_FIELDS = new Set([
   "candidateB",
 ]);
 
-function sha256(value) {
+export interface BlindRow {
+  id: string;
+  platform: string;
+  context: string;
+  scenario: string;
+  facts: string[];
+  constraints: string[];
+  candidateA: string;
+  candidateB: string;
+}
+
+export interface Label {
+  id: string;
+  platform: string;
+  choice: Choice;
+  outcome: Outcome;
+  labeledAt: string;
+}
+
+export type BlindMapping = Record<string, { a: Branch; b: Branch }>;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+}
+
+function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function safeChild(parent, name) {
-  if (typeof name !== "string" || name === "" || isAbsolute(name)) {
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function safeChild(parent: string, name: string): string {
+  if (name === "" || isAbsolute(name)) {
     throw new Error(`unsafe child path ${JSON.stringify(name)}`);
   }
   const root = resolve(parent);
@@ -36,35 +73,42 @@ function safeChild(parent, name) {
   return child;
 }
 
-async function writeAtomically(path, contents) {
+async function writeAtomically(path: string, contents: string): Promise<void> {
   const temporary = safeChild(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
   await writeFile(temporary, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
   await rename(temporary, path);
 }
 
-async function writeJson(path, value) {
+async function writeJson(path: string, value: unknown): Promise<void> {
   await writeAtomically(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function writeJsonl(path, values) {
+async function writeJsonl(path: string, values: unknown[]): Promise<void> {
   const body = values.length === 0 ? "" : `${values.map((value) => JSON.stringify(value)).join("\n")}\n`;
   await writeAtomically(path, body);
 }
 
-function assertCanonicalWithin(root, child, label) {
+function assertCanonicalWithin(root: string, child: string, label: string): void {
   if (child !== root && !child.startsWith(`${root}${sep}`)) {
     throw new Error(`${label} escapes the run directory`);
   }
 }
 
-async function readRunFile(runDir, name, label, { optional = false } = {}) {
+async function readRunFile(
+  runDir: string,
+  name: string,
+  label: string,
+  { optional = false }: { optional?: boolean } = {},
+): Promise<string | undefined> {
   const path = safeChild(runDir, name);
   let info;
   try {
     info = await lstat(path);
   } catch (error) {
-    if (optional && error.code === "ENOENT") return undefined;
-    if (error.code === "ENOENT") throw new Error(`${label} not found: ${path}`);
+    if (errorCode(error) === "ENOENT") {
+      if (optional) return undefined;
+      throw new Error(`${label} not found: ${path}`);
+    }
     throw error;
   }
   if (info.isSymbolicLink() || !info.isFile()) {
@@ -76,66 +120,80 @@ async function readRunFile(runDir, name, label, { optional = false } = {}) {
   return readFile(canonicalPath, "utf8");
 }
 
-export function parseJsonl(source, label = "JSONL") {
-  const records = [];
+export function parseJsonl(source: string, label = "JSONL"): unknown[] {
+  const records: unknown[] = [];
   for (const [index, raw] of source.split(/\r?\n/).entries()) {
     const line = raw.trim();
     if (!line) continue;
     try {
       records.push(JSON.parse(line));
     } catch (error) {
-      throw new Error(`${label}:${index + 1}: invalid JSON (${error.message})`);
+      throw new Error(`${label}:${index + 1}: invalid JSON (${errorMessage(error)})`);
     }
   }
   return records;
 }
 
-function assertNonEmptyString(value, field, location) {
+function requireText(record: Record<string, unknown>, field: string, location: string): string {
+  const value = record[field];
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${location}: ${field} must be a non-empty string`);
   }
+  return value;
 }
 
-export function validateBlindRows(records) {
+function requireStringArray(
+  record: Record<string, unknown>,
+  field: string,
+  location: string,
+): string[] {
+  const value = record[field];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+    throw new Error(`${location}: ${field} must be an array of non-empty strings`);
+  }
+  return value as string[];
+}
+
+export function validateBlindRows(records: unknown[]): BlindRow[] {
   if (records.length === 0) throw new Error("blind-review: expected at least one record");
-  const ids = new Set();
-  return records.map((record, index) => {
+  const ids = new Set<string>();
+  return records.map((value, index) => {
     const location = `blind-review:${index + 1}`;
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error(`${location}: expected an object`);
-    }
+    const record = asObject(value);
+    if (!record) throw new Error(`${location}: expected an object`);
     for (const field of Object.keys(record)) {
       if (!BLIND_FIELDS.has(field)) throw new Error(`${location}: unexpected field ${JSON.stringify(field)}`);
     }
-    for (const field of ["id", "platform", "context", "scenario", "candidateA", "candidateB"]) {
-      assertNonEmptyString(record[field], field, location);
-    }
-    for (const field of ["facts", "constraints"]) {
-      if (!Array.isArray(record[field]) || record[field].some((item) => typeof item !== "string" || item.trim() === "")) {
-        throw new Error(`${location}: ${field} must be an array of non-empty strings`);
-      }
-    }
-    if (ids.has(record.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(record.id)}`);
-    ids.add(record.id);
-    return record;
+    const row: BlindRow = {
+      id: requireText(record, "id", location),
+      platform: requireText(record, "platform", location),
+      context: requireText(record, "context", location),
+      scenario: requireText(record, "scenario", location),
+      candidateA: requireText(record, "candidateA", location),
+      candidateB: requireText(record, "candidateB", location),
+      facts: requireStringArray(record, "facts", location),
+      constraints: requireStringArray(record, "constraints", location),
+    };
+    if (ids.has(row.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(row.id)}`);
+    ids.add(row.id);
+    return row;
   });
 }
 
-export function validateReferences(records, caseIds) {
-  const references = new Map();
-  for (const [index, record] of records.entries()) {
+export function validateReferences(records: unknown[], caseIds: Set<string>): Map<string, string> {
+  const references = new Map<string, string>();
+  for (const [index, value] of records.entries()) {
     const location = `references:${index + 1}`;
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error(`${location}: expected an object`);
-    }
+    const record = asObject(value);
+    if (!record) throw new Error(`${location}: expected an object`);
     const fields = Object.keys(record);
     if (fields.length !== 2 || !fields.includes("id") || !fields.includes("reference")) {
       throw new Error(`${location}: expected only id and reference`);
     }
-    assertNonEmptyString(record.id, "id", location);
-    assertNonEmptyString(record.reference, "reference", location);
-    if (references.has(record.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(record.id)}`);
-    references.set(record.id, record.reference);
+    const id = requireText(record, "id", location);
+    const reference = requireText(record, "reference", location);
+    if (references.has(id)) throw new Error(`${location}: duplicate id ${JSON.stringify(id)}`);
+    references.set(id, reference);
   }
   for (const id of caseIds) {
     if (!references.has(id)) throw new Error(`references: missing case ${JSON.stringify(id)}`);
@@ -143,55 +201,67 @@ export function validateReferences(records, caseIds) {
   return references;
 }
 
-export function choiceToOutcome(choice, mapping, caseId = "case") {
+export function choiceToOutcome(
+  choice: string,
+  mapping: { a: Branch; b: Branch } | undefined,
+  caseId = "case",
+): Outcome {
   if (!CHOICES.has(choice)) {
     throw new Error(`${caseId}: choice must be a, b, tie, or invalid`);
   }
   if (choice === "tie" || choice === "invalid") return choice;
-  const branch = mapping?.[choice];
+  const branch = mapping?.[choice as "a" | "b"];
   if (branch !== "baseline" && branch !== "treatment") {
     throw new Error(`${caseId}: manifest has an invalid blind mapping`);
   }
   return `${branch}-win`;
 }
 
-function expectedBlindAssignment(seed, caseId) {
+function expectedBlindAssignment(seed: string, caseId: string): { a: Branch; b: Branch } {
   const treatmentIsA = Number.parseInt(sha256(`${seed}\0${caseId}`).slice(0, 2), 16) % 2 === 0;
   return treatmentIsA ? { a: "treatment", b: "baseline" } : { a: "baseline", b: "treatment" };
 }
 
-function validateBlindMapping(mapping, blindRows, seed) {
+function validateBlindMapping(mapping: unknown, blindRows: BlindRow[], seed: unknown): BlindMapping {
   if (typeof seed !== "string" || seed === "") {
     throw new Error("manifest config must contain a non-empty blind seed");
   }
-  if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) {
-    throw new Error("manifest blindMapping must be an object");
-  }
+  const mappings = asObject(mapping);
+  if (!mappings) throw new Error("manifest blindMapping must be an object");
   const expectedIds = blindRows.map((row) => row.id).sort();
-  const actualIds = Object.keys(mapping).sort();
+  const actualIds = Object.keys(mappings).sort();
   if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
     throw new Error("manifest blindMapping IDs do not match blind-review IDs");
   }
   for (const id of expectedIds) {
-    const entry = mapping[id];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`manifest blindMapping for ${JSON.stringify(id)} is invalid`);
-    }
+    const entry = asObject(mappings[id]);
+    if (!entry) throw new Error(`manifest blindMapping for ${JSON.stringify(id)} is invalid`);
     const fields = Object.keys(entry).sort();
     if (JSON.stringify(fields) !== JSON.stringify(["a", "b"])) {
       throw new Error(`manifest blindMapping for ${JSON.stringify(id)} must contain only a and b`);
     }
-    if (!new Set([entry.a, entry.b]).has("baseline") || !new Set([entry.a, entry.b]).has("treatment") || entry.a === entry.b) {
+    const branches = new Set([entry.a, entry.b]);
+    if (!branches.has("baseline") || !branches.has("treatment") || entry.a === entry.b) {
       throw new Error(`manifest blindMapping for ${JSON.stringify(id)} must assign baseline and treatment once each`);
     }
     if (JSON.stringify(entry) !== JSON.stringify(expectedBlindAssignment(seed, id))) {
       throw new Error(`manifest blindMapping for ${JSON.stringify(id)} does not match its recorded seed`);
     }
   }
+  return mappings as BlindMapping;
 }
 
-export function summarizeLabels(labels) {
-  const makeBucket = () => ({
+export interface Bucket {
+  reviewed: number;
+  valid: number;
+  "treatment-win": number;
+  "baseline-win": number;
+  tie: number;
+  invalid: number;
+}
+
+export function summarizeLabels(labels: Pick<Label, "id" | "platform" | "outcome">[]) {
+  const makeBucket = (): Bucket => ({
     reviewed: 0,
     valid: 0,
     "treatment-win": 0,
@@ -200,11 +270,11 @@ export function summarizeLabels(labels) {
     invalid: 0,
   });
   const overall = makeBucket();
-  const byPlatform = new Map();
+  const byPlatform = new Map<string, Bucket>();
   for (const label of labels) {
     if (!OUTCOMES.has(label.outcome)) throw new Error(`label ${label.id}: invalid outcome ${JSON.stringify(label.outcome)}`);
     if (!byPlatform.has(label.platform)) byPlatform.set(label.platform, makeBucket());
-    for (const bucket of [overall, byPlatform.get(label.platform)]) {
+    for (const bucket of [overall, byPlatform.get(label.platform)!]) {
       bucket.reviewed += 1;
       bucket[label.outcome] += 1;
       if (label.outcome !== "invalid") bucket.valid += 1;
@@ -216,11 +286,14 @@ export function summarizeLabels(labels) {
   };
 }
 
-function percentage(count, denominator) {
+function percentage(count: number, denominator: number): string {
   return denominator === 0 ? "n/a" : `${((count / denominator) * 100).toFixed(1)}%`;
 }
 
-export function renderReport(labels, { runId, generatedAt = new Date().toISOString() } = {}) {
+export function renderReport(
+  labels: Pick<Label, "id" | "platform" | "outcome">[],
+  { runId, generatedAt = new Date().toISOString() }: { runId?: string; generatedAt?: string } = {},
+): string {
   const summary = summarizeLabels(labels);
   const lines = [
     "# Tone of voice evaluation report",
@@ -264,51 +337,65 @@ export function renderReport(labels, { runId, generatedAt = new Date().toISOStri
   return lines.join("\n");
 }
 
-function parseLabelInputs(records, validIds) {
-  const choices = new Map();
-  for (const [index, record] of records.entries()) {
+function parseLabelInputs(records: unknown[], validIds: Set<string>): Map<string, Choice> {
+  const choices = new Map<string, Choice>();
+  for (const [index, value] of records.entries()) {
     const location = `labels-input:${index + 1}`;
-    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error(`${location}: expected an object`);
+    const record = asObject(value);
+    if (!record) throw new Error(`${location}: expected an object`);
     const fields = Object.keys(record);
     if (fields.length !== 2 || !fields.includes("id") || !fields.includes("choice")) {
       throw new Error(`${location}: expected only id and choice`);
     }
-    if (!validIds.has(record.id)) throw new Error(`${location}: unknown case ${JSON.stringify(record.id)}`);
-    if (!CHOICES.has(record.choice)) throw new Error(`${location}: choice must be a, b, tie, or invalid`);
-    if (choices.has(record.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(record.id)}`);
-    choices.set(record.id, record.choice);
+    const id = record.id;
+    if (typeof id !== "string" || !validIds.has(id)) {
+      throw new Error(`${location}: unknown case ${JSON.stringify(id)}`);
+    }
+    if (typeof record.choice !== "string" || !CHOICES.has(record.choice)) {
+      throw new Error(`${location}: choice must be a, b, tie, or invalid`);
+    }
+    if (choices.has(id)) throw new Error(`${location}: duplicate id ${JSON.stringify(id)}`);
+    choices.set(id, record.choice as Choice);
   }
   return choices;
 }
 
-async function loadExistingLabels(runDir, rowsById, mapping) {
+async function loadExistingLabels(
+  runDir: string,
+  rowsById: Map<string, BlindRow>,
+  mapping: BlindMapping,
+): Promise<Map<string, Label>> {
   const source = await readRunFile(runDir, "labels.jsonl", "labels", { optional: true });
   if (source === undefined) return new Map();
   const records = parseJsonl(source, "labels");
-  const labels = new Map();
-  for (const [index, record] of records.entries()) {
+  const labels = new Map<string, Label>();
+  for (const [index, value] of records.entries()) {
     const location = `labels:${index + 1}`;
-    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error(`${location}: expected an object`);
+    const record = asObject(value);
+    if (!record) throw new Error(`${location}: expected an object`);
     const fields = Object.keys(record).sort();
     if (JSON.stringify(fields) !== JSON.stringify(["choice", "id", "labeledAt", "outcome", "platform"])) {
       throw new Error(`${location}: stored label fields were changed`);
     }
-    const row = rowsById.get(record.id);
+    const row = typeof record.id === "string" ? rowsById.get(record.id) : undefined;
     if (!row) throw new Error(`${location}: unknown case ${JSON.stringify(record.id)}`);
-    if (!CHOICES.has(record.choice)) throw new Error(`${location}: invalid choice`);
+    if (typeof record.choice !== "string" || !CHOICES.has(record.choice)) {
+      throw new Error(`${location}: invalid choice`);
+    }
     if (record.platform !== row.platform) throw new Error(`${location}: platform does not match blind review`);
-    const expectedOutcome = choiceToOutcome(record.choice, mapping[record.id], record.id);
-    if (record.outcome !== expectedOutcome) throw new Error(`${location}: outcome does not match choice and blind mapping`);
+    if (record.outcome !== choiceToOutcome(record.choice, mapping[row.id], row.id)) {
+      throw new Error(`${location}: outcome does not match choice and blind mapping`);
+    }
     if (typeof record.labeledAt !== "string" || Number.isNaN(Date.parse(record.labeledAt))) {
       throw new Error(`${location}: labeledAt is invalid`);
     }
-    if (labels.has(record.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(record.id)}`);
-    labels.set(record.id, record);
+    if (labels.has(row.id)) throw new Error(`${location}: duplicate id ${JSON.stringify(row.id)}`);
+    labels.set(row.id, record as unknown as Label);
   }
   return labels;
 }
 
-function formatCaseForReview(row, reference, position, total) {
+function formatCaseForReview(row: BlindRow, reference: string, position: number, total: number): string {
   return [
     "",
     `Case ${position}/${total}: ${row.id} (${row.platform}, ${row.context})`,
@@ -331,40 +418,52 @@ function formatCaseForReview(row, reference, position, total) {
   ].join("\n");
 }
 
-async function askForChoice(reader, row, reference, position, total) {
+async function askForChoice(
+  reader: { question: (query: string) => Promise<string> },
+  row: BlindRow,
+  reference: string,
+  position: number,
+  total: number,
+): Promise<Choice> {
   output.write(`${formatCaseForReview(row, reference, position, total)}\n`);
   while (true) {
     const answer = (await reader.question("Choice [a/b/tie/invalid]: ")).trim().toLowerCase();
-    if (CHOICES.has(answer)) return answer;
+    if (CHOICES.has(answer)) return answer as Choice;
     output.write("Enter a, b, tie, or invalid.\n");
   }
 }
 
-export async function reviewEvaluation({ runDir, referencesPath, labelsInputPath, interactive = true }) {
+export async function reviewEvaluation(
+  { runDir, referencesPath, labelsInputPath, interactive = true }: {
+    runDir: string;
+    referencesPath: string;
+    labelsInputPath?: string;
+    interactive?: boolean;
+  },
+) {
   const resolvedRunDir = resolve(runDir);
-  const info = await lstat(resolvedRunDir).catch((error) => {
-    if (error.code === "ENOENT") throw new Error(`run directory not found: ${resolvedRunDir}`);
+  const info = await lstat(resolvedRunDir).catch((error: unknown) => {
+    if (errorCode(error) === "ENOENT") throw new Error(`run directory not found: ${resolvedRunDir}`);
     throw error;
   });
   if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`run path must be a real directory, not a symlink: ${resolvedRunDir}`);
   const manifestPath = safeChild(resolvedRunDir, "manifest.json");
-  const blindPath = safeChild(resolvedRunDir, "blind-review.jsonl");
   const labelsPath = safeChild(resolvedRunDir, "labels.jsonl");
   const reportPath = safeChild(resolvedRunDir, "report.md");
-  const manifest = JSON.parse(await readRunFile(resolvedRunDir, "manifest.json", "manifest"));
+  const manifest = JSON.parse(
+    (await readRunFile(resolvedRunDir, "manifest.json", "manifest")) as string,
+  ) as Record<string, unknown>;
   if (manifest.status !== "generated" && manifest.status !== "reviewed") {
     throw new Error(`run is not ready for review (status: ${manifest.status || "unknown"})`);
   }
-  const blindSource = await readRunFile(resolvedRunDir, "blind-review.jsonl", "blind-review");
+  const blindSource = (await readRunFile(resolvedRunDir, "blind-review.jsonl", "blind-review")) as string;
   const blindRows = validateBlindRows(parseJsonl(blindSource, "blind-review"));
   const validIds = new Set(blindRows.map((row) => row.id));
   const rowsById = new Map(blindRows.map((row) => [row.id, row]));
-  validateBlindMapping(manifest.blindMapping, blindRows, manifest.config?.seed);
+  const config = asObject(manifest.config);
+  const blindMapping = validateBlindMapping(manifest.blindMapping, blindRows, config?.seed);
   const referencesSource = await readFile(resolve(referencesPath), "utf8");
-  const references = validateReferences(
-    parseJsonl(referencesSource, "references"),
-    validIds,
-  );
+  const references = validateReferences(parseJsonl(referencesSource, "references"), validIds);
   const reviewInputs = {
     version: 1,
     blindReviewHash: sha256(blindSource),
@@ -378,17 +477,18 @@ export async function reviewEvaluation({ runDir, referencesPath, labelsInputPath
     manifest.updatedAt = new Date().toISOString();
     await writeJson(manifestPath, manifest);
   }
-  const labels = await loadExistingLabels(resolvedRunDir, rowsById, manifest.blindMapping);
+  const labels = await loadExistingLabels(resolvedRunDir, rowsById, blindMapping);
   const suppliedChoices = labelsInputPath
     ? parseLabelInputs(parseJsonl(await readFile(resolve(labelsInputPath), "utf8"), "labels-input"), validIds)
-    : new Map();
+    : new Map<string, Choice>();
   let reader;
   try {
     if (interactive && !labelsInputPath) reader = createInterface({ input, output });
     for (const [index, row] of blindRows.entries()) {
-      if (labels.has(row.id)) {
+      const existing = labels.get(row.id);
+      if (existing) {
         const supplied = suppliedChoices.get(row.id);
-        if (supplied && supplied !== labels.get(row.id).choice) {
+        if (supplied && supplied !== existing.choice) {
           throw new Error(`refusing to replace existing label for case ${JSON.stringify(row.id)}`);
         }
         continue;
@@ -396,32 +496,30 @@ export async function reviewEvaluation({ runDir, referencesPath, labelsInputPath
       let choice = suppliedChoices.get(row.id);
       if (!choice) {
         if (!reader) throw new Error(`no label supplied for case ${JSON.stringify(row.id)}`);
-        choice = await askForChoice(reader, row, references.get(row.id), index + 1, blindRows.length);
+        choice = await askForChoice(reader, row, references.get(row.id)!, index + 1, blindRows.length);
       }
-      const mapping = manifest.blindMapping?.[row.id];
-      const label = {
+      labels.set(row.id, {
         id: row.id,
         platform: row.platform,
         choice,
-        outcome: choiceToOutcome(choice, mapping, row.id),
+        outcome: choiceToOutcome(choice, blindMapping[row.id], row.id),
         labeledAt: new Date().toISOString(),
-      };
-      labels.set(row.id, label);
-      await writeJsonl(labelsPath, blindRows.flatMap((item) => labels.has(item.id) ? [labels.get(item.id)] : []));
+      });
+      await writeJsonl(labelsPath, orderLabels(blindRows, labels));
     }
   } finally {
     reader?.close();
   }
 
-  const orderedLabels = blindRows.flatMap((row) => labels.has(row.id) ? [labels.get(row.id)] : []);
+  const orderedLabels = orderLabels(blindRows, labels);
   const complete = orderedLabels.length === blindRows.length;
-  const report = renderReport(orderedLabels, { runId: manifest.runId });
+  const report = renderReport(orderedLabels, { runId: manifest.runId as string | undefined });
   await writeAtomically(reportPath, report);
   manifest.status = complete ? "reviewed" : "generated";
   manifest.updatedAt = new Date().toISOString();
   manifest.review = { labeled: orderedLabels.length, total: blindRows.length, complete };
   manifest.artifacts = {
-    ...(manifest.artifacts || {}),
+    ...(asObject(manifest.artifacts) || {}),
     labels: "labels.jsonl",
     report: "report.md",
   };
@@ -429,8 +527,15 @@ export async function reviewEvaluation({ runDir, referencesPath, labelsInputPath
   return { labels: orderedLabels, report, complete, labelsPath, reportPath };
 }
 
-function parseCli(argv) {
-  const options = {};
+function orderLabels(blindRows: BlindRow[], labels: Map<string, Label>): Label[] {
+  return blindRows.flatMap((row) => {
+    const label = labels.get(row.id);
+    return label ? [label] : [];
+  });
+}
+
+function parseCli(argv: string[]) {
+  const options: Record<string, string> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith("--")) throw new Error(`unexpected argument ${JSON.stringify(token)}`);
@@ -455,17 +560,17 @@ function parseCli(argv) {
   };
 }
 
-function usage() {
+function usage(): string {
   return [
     "Usage:",
-    "  node scripts/review-eval.mjs --run-dir <run> --references <references.jsonl>",
-    "  node scripts/review-eval.mjs --run-dir <run> --references <references.jsonl> --labels-file <choices.jsonl>",
+    "  node scripts/review-eval.ts --run-dir <run> --references <references.jsonl>",
+    "  node scripts/review-eval.ts --run-dir <run> --references <references.jsonl> --labels-file <choices.jsonl>",
     "",
     "A choices file contains one {\"id\":\"...\",\"choice\":\"a|b|tie|invalid\"} record per line.",
   ].join("\n");
 }
 
-async function main() {
+async function main(): Promise<void> {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     process.stdout.write(`${usage()}\n`);
     return;
@@ -476,8 +581,8 @@ async function main() {
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    process.stderr.write(`review-eval: ${error.message}\n`);
+  main().catch((error: unknown) => {
+    process.stderr.write(`review-eval: ${errorMessage(error)}\n`);
     process.exitCode = 1;
   });
 }

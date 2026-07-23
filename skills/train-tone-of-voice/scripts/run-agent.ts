@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,11 +7,14 @@ import {
   UserInputError,
   assertPhysicalConfinement,
   confinedPath,
+  errorCode,
+  errorMessage,
   parseJsonl,
   resolveDataHome,
   sha256,
   validatePlatform,
-} from './prepare-corpus.mjs';
+  type CorpusRecord,
+} from './prepare-corpus.ts';
 
 // Local model calls can legitimately take a minute. Two minutes gives interactive
 // agents room to answer without allowing a stuck process to hang indefinitely.
@@ -32,6 +33,8 @@ const LOCAL_IMAGE_PATTERNS = [
   new RegExp(`(?:^|[\\s(\\"'\\x60])((?:file:\\/\\/\\/|~\\/|\\.{1,2}\\/|\\/(?!\\/))[^\\r\\n\\"'\\x60<>)]*?\\.${IMAGE_EXTENSION})(?=$|[\\s\\"'\\x60<>),;:])`, 'im'),
   new RegExp(`(?:^|[\\s(\\"'\\x60])([a-zA-Z]:[\\\\/][^\\r\\n\\"'\\x60<>)]*?\\.${IMAGE_EXTENSION})(?=$|[\\s\\"'\\x60<>),;:])`, 'im'),
 ];
+
+export type Runner = 'codex' | 'claude';
 
 export const PROFILE_SCHEMA = Object.freeze({
   type: 'object',
@@ -54,14 +57,20 @@ export const CASE_SCHEMA = Object.freeze({
 });
 
 export class RunnerError extends Error {
-  constructor(message, details = {}) {
+  details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'RunnerError';
     this.details = details;
   }
 }
 
-export function capabilityPolicy(runner) {
+export type CapabilityPolicy =
+  | { version: string; disabled: string[]; residual: string[] }
+  | { version: string; tools: 'none' };
+
+export function capabilityPolicy(runner: Runner): CapabilityPolicy {
   if (runner === 'codex') {
     return {
       version: 'codex-restricted-v3',
@@ -80,7 +89,13 @@ export function capabilityPolicy(runner) {
   throw new UserInputError('runner must be codex or claude');
 }
 
-export function assertNoLocalImagePath(value, location = 'model input') {
+function assertRunner(runner: string): asserts runner is Runner {
+  if (runner !== 'codex' && runner !== 'claude') {
+    throw new UserInputError('runner must be codex or claude');
+  }
+}
+
+export function assertNoLocalImagePath(value: unknown, location = 'model input'): void {
   if (typeof value !== 'string') return;
   for (const pattern of LOCAL_IMAGE_PATTERNS) {
     const match = pattern.exec(value);
@@ -92,7 +107,7 @@ export function assertNoLocalImagePath(value, location = 'model input') {
   }
 }
 
-function ensurePositiveInteger(value, name, fallback) {
+function ensurePositiveInteger(value: unknown, name: string, fallback: number): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
@@ -101,9 +116,19 @@ function ensurePositiveInteger(value, name, fallback) {
   return parsed;
 }
 
-function appendChunk(state, chunk, maximum, child) {
-  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  state.bytes += buffer.length;
+interface CaptureState {
+  chunks: Buffer[];
+  bytes: number;
+  failure: RunnerError | null;
+}
+
+function appendChunk(
+  state: CaptureState,
+  chunk: Buffer,
+  maximum: number,
+  child: { kill: (signal: NodeJS.Signals) => boolean },
+): void {
+  state.bytes += chunk.length;
   if (state.bytes > maximum && !state.failure) {
     state.failure = new RunnerError(`runner output exceeded ${maximum} bytes`, {
       reason: 'output-size',
@@ -111,20 +136,35 @@ function appendChunk(state, chunk, maximum, child) {
     child.kill('SIGKILL');
     return;
   }
-  state.chunks.push(buffer);
+  state.chunks.push(chunk);
+}
+
+export interface CaptureResult {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+export interface SpawnOptions {
+  stdin?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
 }
 
 export function spawnCaptured(
-  binary,
-  args,
+  binary: string,
+  args: string[],
   {
     stdin = '',
     cwd,
     env = process.env,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
-  } = {},
-) {
+  }: SpawnOptions = {},
+): Promise<CaptureResult> {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(binary, args, {
       cwd,
@@ -132,21 +172,21 @@ export function spawnCaptured(
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const stdout = { chunks: [], bytes: 0, failure: null };
-    const stderr = { chunks: [], bytes: 0, failure: null };
+    const stdout: CaptureState = { chunks: [], bytes: 0, failure: null };
+    const stderr: CaptureState = { chunks: [], bytes: 0, failure: null };
     let timedOut = false;
-    let spawnError = null;
+    let spawnError: NodeJS.ErrnoException | null = null;
 
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGKILL');
     }, timeoutMs);
 
-    child.on('error', (error) => {
+    child.on('error', (error: NodeJS.ErrnoException) => {
       spawnError = error;
     });
-    child.stdout.on('data', (chunk) => appendChunk(stdout, chunk, maxOutputBytes, child));
-    child.stderr.on('data', (chunk) => appendChunk(stderr, chunk, maxOutputBytes, child));
+    child.stdout.on('data', (chunk: Buffer) => appendChunk(stdout, chunk, maxOutputBytes, child));
+    child.stderr.on('data', (chunk: Buffer) => appendChunk(stderr, chunk, maxOutputBytes, child));
     child.stdin.on('error', () => {
       // A process may exit before consuming stdin. The close handler reports the
       // useful exit status and stderr instead of surfacing an EPIPE stack trace.
@@ -185,7 +225,9 @@ export function spawnCaptured(
   });
 }
 
-export function buildCodexArgs({ schemaPath, outputPath, model }) {
+export function buildCodexArgs(
+  { schemaPath, outputPath, model }: { schemaPath: string; outputPath: string; model?: string },
+): string[] {
   const args = [
     'exec',
     '--ephemeral',
@@ -216,7 +258,7 @@ export function buildCodexArgs({ schemaPath, outputPath, model }) {
   return args;
 }
 
-export function buildClaudeArgs({ schema, model }) {
+export function buildClaudeArgs({ schema, model }: { schema: object; model?: string }): string[] {
   const args = [
     '-p',
     '--safe-mode',
@@ -232,37 +274,43 @@ export function buildClaudeArgs({ schema, model }) {
   return args;
 }
 
-export function parseJsonOutput(content, runner) {
-  let parsed;
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+export function parseJsonOutput(content: string, runner: Runner): Record<string, unknown> {
+  let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch (error) {
-    throw new RunnerError(`${runner} returned malformed JSON: ${error.message}`, {
+    throw new RunnerError(`${runner} returned malformed JSON: ${errorMessage(error)}`, {
       reason: 'malformed-json',
     });
   }
 
+  const output = asObject(parsed);
   if (runner === 'claude') {
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new RunnerError('claude output must be a successful result wrapper', { reason: 'wrapper' });
-    }
-    if (parsed.type !== 'result' || parsed.subtype !== 'success' || parsed.is_error !== false) {
+    if (!output || output.type !== 'result' || output.subtype !== 'success' || output.is_error !== false) {
       throw new RunnerError('claude returned an unsuccessful result wrapper', { reason: 'wrapper' });
     }
-    if (!parsed.structured_output || typeof parsed.structured_output !== 'object' || Array.isArray(parsed.structured_output)) {
+    const structured = asObject(output.structured_output);
+    if (!structured) {
       throw new RunnerError('claude result must contain structured_output', { reason: 'wrapper' });
     }
-    return parsed.structured_output;
+    return structured;
   }
-  return parsed;
+  if (!output) throw new RunnerError('codex output must be an object', { reason: 'schema' });
+  return output;
 }
 
-async function readOutputFile(path, maximum) {
+async function readOutputFile(path: string, maximum: number): Promise<string> {
   let details;
   try {
     details = await stat(path);
   } catch (error) {
-    if (error.code === 'ENOENT') {
+    if (errorCode(error) === 'ENOENT') {
       throw new RunnerError('codex completed without writing --output-last-message', {
         reason: 'missing-output',
       });
@@ -276,9 +324,9 @@ async function readOutputFile(path, maximum) {
 }
 
 export async function getRunnerVersion(
-  binary,
-  { cwd, env = process.env, timeoutMs = 10_000 } = {},
-) {
+  binary: string,
+  { cwd, env = process.env, timeoutMs = 10_000 }: SpawnOptions = {},
+): Promise<string> {
   const result = await spawnCaptured(binary, ['--version'], {
     cwd,
     env,
@@ -287,6 +335,20 @@ export async function getRunnerVersion(
     maxOutputBytes: 64 * 1024,
   });
   return result.stdout.trim() || result.stderr.trim() || 'unknown';
+}
+
+export interface AgentRun {
+  output: Record<string, unknown>;
+  metadata: {
+    runner: Runner;
+    version: string;
+    binary: string;
+    argv: string[];
+    model: string | null;
+    capabilityPolicy: CapabilityPolicy;
+    promptSha256: string;
+    exitStatus: number | null;
+  };
 }
 
 export async function runAgent({
@@ -298,16 +360,18 @@ export async function runAgent({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
   env = process.env,
-}) {
-  if (!['codex', 'claude'].includes(runner)) {
-    throw new UserInputError('runner must be codex or claude');
-  }
-  if (typeof prompt !== 'string' || prompt.trim() === '') {
-    throw new UserInputError('prompt must be a non-empty string');
-  }
-  if (!schema || typeof schema !== 'object') {
-    throw new UserInputError('schema must be a JSON object');
-  }
+}: {
+  runner: string;
+  prompt: string;
+  schema: object;
+  model?: string;
+  binary?: string;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<AgentRun> {
+  assertRunner(runner);
+  if (prompt.trim() === '') throw new UserInputError('prompt must be a non-empty string');
 
   const runDirectory = await mkdtemp(join(tmpdir(), 'tone-of-voice-run-'));
   const schemaPath = join(runDirectory, 'schema.json');
@@ -329,9 +393,8 @@ export async function runAgent({
     const content = runner === 'codex'
       ? await readOutputFile(outputPath, maxOutputBytes)
       : result.stdout;
-    const output = parseJsonOutput(content, runner);
     return {
-      output,
+      output: parseJsonOutput(content, runner),
       metadata: {
         runner,
         version,
@@ -348,10 +411,7 @@ export async function runAgent({
   }
 }
 
-function validateProfileOutput(output) {
-  if (!output || typeof output !== 'object' || Array.isArray(output)) {
-    throw new RunnerError('profile runner output must be an object', { reason: 'schema' });
-  }
+function validateProfileOutput(output: Record<string, unknown>): string {
   const keys = Object.keys(output);
   if (keys.length !== 1 || keys[0] !== 'profile' || typeof output.profile !== 'string' || !output.profile.trim()) {
     throw new RunnerError('profile runner output must contain only a non-empty profile string', {
@@ -361,12 +421,14 @@ function validateProfileOutput(output) {
   return output.profile;
 }
 
-function validateCaseOutput(output) {
-  if (!output || typeof output !== 'object' || Array.isArray(output)) {
-    throw new RunnerError('case runner output must be an object', { reason: 'schema' });
-  }
-  const keys = Object.keys(output).sort();
-  if (keys.join(',') !== 'constraints,facts,scenario') {
+interface CaseOutput {
+  scenario: string;
+  facts: string[];
+  constraints: string[];
+}
+
+function validateCaseOutput(output: Record<string, unknown>): CaseOutput {
+  if (Object.keys(output).sort().join(',') !== 'constraints,facts,scenario') {
     throw new RunnerError('case runner output must contain only scenario, facts, and constraints', {
       reason: 'schema',
     });
@@ -374,24 +436,29 @@ function validateCaseOutput(output) {
   if (typeof output.scenario !== 'string' || !output.scenario.trim()) {
     throw new RunnerError('case scenario must be a non-empty string', { reason: 'schema' });
   }
-  for (const field of ['facts', 'constraints']) {
+  for (const field of ['facts', 'constraints'] as const) {
+    const value = output[field];
     const minimum = field === 'facts' ? 1 : 0;
-    if (!Array.isArray(output[field]) || output[field].length < minimum || output[field].some(
-      (value) => typeof value !== 'string' || !value.trim(),
+    if (!Array.isArray(value) || value.length < minimum || value.some(
+      (item) => typeof item !== 'string' || !item.trim(),
     )) {
       const requirement = minimum === 0 ? 'a string array' : 'a non-empty string array';
       throw new RunnerError(`case ${field} must be ${requirement}`, { reason: 'schema' });
     }
   }
-  return output;
+  return {
+    scenario: output.scenario,
+    facts: output.facts as string[],
+    constraints: output.constraints as string[],
+  };
 }
 
-async function readLimited(path, maximum = MAX_CORPUS_BYTES) {
+async function readLimited(path: string, maximum = MAX_CORPUS_BYTES): Promise<string> {
   let details;
   try {
     details = await stat(path);
   } catch (error) {
-    if (error.code === 'ENOENT') throw new UserInputError(`required training file not found: ${path}`);
+    if (errorCode(error) === 'ENOENT') throw new UserInputError(`required training file not found: ${path}`);
     throw error;
   }
   if (!details.isFile()) throw new UserInputError(`required training input is not a file: ${path}`);
@@ -399,12 +466,18 @@ async function readLimited(path, maximum = MAX_CORPUS_BYTES) {
   return readFile(path, 'utf8');
 }
 
-export async function readConfinedModelInput(root, path, maximum = MAX_CORPUS_BYTES) {
+export async function readConfinedModelInput(
+  root: string,
+  path: string,
+  maximum = MAX_CORPUS_BYTES,
+): Promise<string> {
   await assertPhysicalConfinement(root, path);
   return readLimited(path, maximum);
 }
 
-export function buildProfilePrompt({ platform, records, template }) {
+export function buildProfilePrompt(
+  { platform, records, template }: { platform: string; records: CorpusRecord[]; template: string },
+): string {
   assertNoLocalImagePath(template, 'profile template');
   for (const [recordIndex, record] of records.entries()) {
     for (const [field, value] of Object.entries(record)) {
@@ -425,7 +498,7 @@ export function buildProfilePrompt({ platform, records, template }) {
   ].join('\n');
 }
 
-export function buildCasePrompt(record) {
+export function buildCasePrompt(record: CorpusRecord): string {
   for (const [field, value] of Object.entries(record)) {
     assertNoLocalImagePath(value, `held-out record.${field}`);
   }
@@ -442,14 +515,16 @@ export function buildCasePrompt(record) {
   ].join('\n');
 }
 
-function providerDisclosure(runner) {
+function providerDisclosure(runner: Runner): string {
   const provider = runner === 'codex' ? 'OpenAI' : 'Anthropic';
   return `The repository makes no network request, but the selected local ${runner} CLI sends the listed prompt content to ${provider}.`;
 }
 
-export async function buildProfileTask({ home, platform, runner, model }) {
+export async function buildProfileTask(
+  { home, platform, runner, model }: { home?: string; platform?: string; runner: string; model?: string },
+) {
   validatePlatform(platform, 'profile');
-  if (!['codex', 'claude'].includes(runner)) throw new UserInputError('runner must be codex or claude');
+  assertRunner(runner);
   const dataHome = resolveDataHome(home);
   const trainPath = confinedPath(dataHome, 'corpus', 'train.jsonl');
   const trainContent = await readConfinedModelInput(dataHome, trainPath);
@@ -459,12 +534,12 @@ export async function buildProfileTask({ home, platform, runner, model }) {
     throw new UserInputError(`train.jsonl contains no records for platform ${JSON.stringify(platform)}`);
   }
   const template = await readConfinedModelInput(SKILL_DIRECTORY, PROFILE_TEMPLATE_PATH, 128 * 1024);
-  const prompt = buildProfilePrompt({ platform, records, template });
+  const prompt = buildProfilePrompt({ platform: platform as string, records, template });
   return {
     prompt,
     schema: PROFILE_SCHEMA,
     preview: {
-      kind: 'profile',
+      kind: 'profile' as const,
       platform,
       runner,
       model: model || null,
@@ -485,9 +560,11 @@ export async function buildProfileTask({ home, platform, runner, model }) {
   };
 }
 
-export async function buildCaseTask({ home, id, runner, model }) {
+export async function buildCaseTask(
+  { home, id, runner, model }: { home?: string; id?: string; runner: string; model?: string },
+) {
   if (!id) throw new UserInputError('case requires --id');
-  if (!['codex', 'claude'].includes(runner)) throw new UserInputError('runner must be codex or claude');
+  assertRunner(runner);
   const dataHome = resolveDataHome(home);
   const heldoutPath = confinedPath(dataHome, 'corpus', 'heldout.jsonl');
   const records = parseJsonl(await readConfinedModelInput(dataHome, heldoutPath), { source: heldoutPath });
@@ -499,7 +576,7 @@ export async function buildCaseTask({ home, id, runner, model }) {
     schema: CASE_SCHEMA,
     record,
     preview: {
-      kind: 'case',
+      kind: 'case' as const,
       id,
       platform: record.platform,
       context: record.context,
@@ -517,12 +594,31 @@ export async function buildCaseTask({ home, id, runner, model }) {
   };
 }
 
-function parseArguments(argv) {
+interface CliOptions {
+  task: 'profile' | 'case';
+  mode: 'dry-run' | 'execute';
+  runner: string;
+  confirmSend: boolean;
+  home?: string;
+  platform?: string;
+  model?: string;
+  id?: string;
+  binary?: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+}
+
+function parseArguments(argv: string[]): CliOptions {
   const [task, ...rest] = argv;
   if (!['profile', 'case'].includes(task)) {
     throw new UserInputError('first argument must be profile or case');
   }
-  const options = { task, mode: 'dry-run', runner: 'codex', confirmSend: false };
+  const options: Record<string, string | boolean | number> = {
+    task,
+    mode: 'dry-run',
+    runner: 'codex',
+    confirmSend: false,
+  };
   const valueFlags = new Set([
     '--home', '--platform', '--runner', '--model', '--id', '--mode', '--binary',
     '--timeout-ms', '--max-output-bytes',
@@ -537,10 +633,10 @@ function parseArguments(argv) {
     const value = rest[index + 1];
     if (!value || value.startsWith('--')) throw new UserInputError(`${flag} requires a value`);
     index += 1;
-    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
     options[key] = value;
   }
-  if (!['dry-run', 'execute'].includes(options.mode)) {
+  if (!['dry-run', 'execute'].includes(options.mode as string)) {
     throw new UserInputError('--mode must be dry-run or execute');
   }
   if (options.mode === 'execute' && !options.confirmSend) {
@@ -552,10 +648,10 @@ function parseArguments(argv) {
     '--max-output-bytes',
     DEFAULT_MAX_OUTPUT_BYTES,
   );
-  return options;
+  return options as unknown as CliOptions;
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)): Promise<void> {
   const options = parseArguments(argv);
   const task = options.task === 'profile'
     ? await buildProfileTask(options)
@@ -576,9 +672,8 @@ export async function main(argv = process.argv.slice(2)) {
     maxOutputBytes: options.maxOutputBytes,
   });
 
-  const result = options.task === 'profile'
-    ? { profile: validateProfileOutput(run.output) }
-    : {
+  const result = 'record' in task
+    ? {
         case: {
           id: task.record.id,
           platform: task.record.platform,
@@ -586,7 +681,8 @@ export async function main(argv = process.argv.slice(2)) {
           ...validateCaseOutput(run.output),
         },
         reference: { id: task.record.id, reference: task.record.text },
-      };
+      }
+    : { profile: validateProfileOutput(run.output) };
 
   process.stdout.write(`${JSON.stringify({
     ...task.preview,
@@ -598,11 +694,11 @@ export async function main(argv = process.argv.slice(2)) {
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
 if (invokedPath && fileURLToPath(import.meta.url) === invokedPath) {
-  main().catch((error) => {
+  main().catch((error: unknown) => {
     const prefix = error instanceof UserInputError || error instanceof RunnerError
       ? 'run-agent'
       : 'run-agent: unexpected error';
-    process.stderr.write(`${prefix}: ${error.message}\n`);
+    process.stderr.write(`${prefix}: ${errorMessage(error)}\n`);
     process.exitCode = 1;
   });
 }
