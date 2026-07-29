@@ -1,14 +1,14 @@
 ---
 name: ghostwriter
-description: Drafts, rewrites, or reviews the user's personal messages, emails, posts, and tickets from a private per-platform profile plus a shared soul.md, strips the machine tells that make prose read as AI, and applies a communication-strategy layer to high-stakes messages. Use when asked to "write this in my voice", "draft a Slack message", "reply to this email as me", "write a LinkedIn post", "make this sound like me", "ghostwrite this", "critique my draft", or "will this land". Requires GHOSTWRITER_HOME or ~/.config/ghostwriter with <platform>.md profiles and an optional soul.md; if no profile exists, route setup to train-ghostwriter. For marketing or brand copy use copywriting; for long-form articles use blog-post; to measure a profile use evaluate-ghostwriter.
+description: Drafts, rewrites, or reviews the user's personal messages, emails, posts, and tickets from a private per-platform profile plus a shared soul.md, strips the machine tells that make prose read as AI, and applies a communication-strategy layer to high-stakes messages. Use when asked to "write this in my voice", "draft a Slack message", "reply to this email as me", "write a LinkedIn post", "make this sound like me", "ghostwrite this", "critique my draft", "will this land", or "write a blog post in my voice". Requires GHOSTWRITER_HOME or ~/.config/ghostwriter with <platform>.md profiles and an optional soul.md; if no profile exists, route setup to train-ghostwriter. Also covers long-form posts and essays through the blog platform profile. For marketing or brand copy use copywriting; to measure a profile use evaluate-ghostwriter.
 ---
 
 # Ghostwriter
 
 Write outgoing messages that read as the user wrote them, not as a model did. Two layers, applied together: the private **profile** and **soul.md** make it sound like the user; this skill strips the machine tells no human types and, on request, makes a high-stakes message land. Voice wins every conflict: a tell-free draft that stops sounding like the user has failed.
 
-- **IS:** read-only drafting, rewriting, and reviewing of the user's personal communication, from their private soul and platform profile, with a universal anti-AI-prose pass and an optional strategy layer.
-- **IS NOT:** a trainer (`train-ghostwriter`), evaluator (`evaluate-ghostwriter`), brand copywriter (`copywriting`), or long-form essayist (`blog-post`). It never invents or hardcodes a persona; the voice lives entirely in the private profile and soul.md.
+- **IS:** read-only drafting, rewriting, and reviewing of the user's personal communication and long-form posts, from their private soul and platform profile, with a universal anti-AI-prose pass and an optional strategy layer.
+- **IS NOT:** a trainer (`train-ghostwriter`), evaluator (`evaluate-ghostwriter`), or brand copywriter (`copywriting`). It never invents or hardcodes a persona; the voice lives entirely in the private profile and soul.md.
 
 **Default for every draft: shorter, simpler, more natural.** When two phrasings both fit, take the one with fewer words, plainer vocabulary, and a more human cadence, over any pull toward completeness or polish. A draft that already reads as tight usually isn't; try halving it, then return the shortest version that keeps every fact, link, and the intent.
 
