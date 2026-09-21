@@ -1,35 +1,9 @@
 # Repository instructions
 
-Three independently installable Agent Skills. Keep the repository local-first, dependency-free at runtime, and safe for personal writing data.
+One installable Agent Skill, `skills/ghostwriter`, and nothing to build. Keep it local-first, dependency-free, and safe for personal writing data.
 
-## Before editing
-
-- Read the nearest SKILL.md and every reference needed for the change.
-- Keep each skill self-contained. A skill must not reference files outside its own directory at runtime.
-- Use fictional fixtures only. Never copy a personal profile, export, held-out response, credential, or eval run into Git.
-- Preserve the boundary between cases.jsonl and references.jsonl.
-
-## Implementation
-
-- Scripts are TypeScript run directly by Node's type stripping, so keep every file to erasable syntax (no enums, namespaces, or parameter properties).
-- Use Node.js standard-library modules. Do not add a runtime dependency for work the standard library handles clearly.
-- Spawn local agents with argument arrays and stdin, never through an interpolated shell command.
-- Keep deterministic data work in scripts and language judgment in the invoking agent.
-- Use plan, validate, execute for profile replacement and other multi-file writes.
-- Keep tone rules in private profiles. Runtime instructions must not hard-code one person's stylistic habits.
-- Two ways to make a profile: `ghostwriter` writes a quick one from pasted samples (no scripts, not evaluable); `train-ghostwriter` builds one from exports with a held-out split. Both write under GHOSTWRITER_HOME only.
-- Persistent user data belongs under GHOSTWRITER_HOME, never inside an installed skill. That includes personal profiles at the root and company manifests under `brands/<slug>/`.
-- `copy`, `docs`, and `readme` are surfaces of the ghostwriter skill with generic defaults in their references; a matching `<platform>.md` profile is optional and wins over the defaults.
-
-## Verification
-
-Before declaring a change complete:
-
-    npm test
-    uvx --from skills-ref agentskills validate skills/ghostwriter
-    uvx --from skills-ref agentskills validate skills/train-ghostwriter
-    uvx --from skills-ref agentskills validate skills/evaluate-ghostwriter
-
-The agent-skills house validator also runs against a skill here when that repository is checked out alongside: `../agent-skills/skills/agent-skills-creator/scripts/validate.sh skills/ghostwriter`.
-
-Model-backed smoke tests are opt-in. CI and ordinary unit tests must use fictional fixtures and stub executables.
+- Read `SKILL.md` and every reference the change touches before editing. Every reference and `evals/evals.json` must be named in `SKILL.md`; nothing else in the folder loads.
+- Keep tone rules in private profiles under `GHOSTWRITER_HOME`. Runtime instructions never hard-code one person's or one company's habits, and the repository never holds a real profile, sample, or excerpt.
+- No em dashes anywhere. Commas, colons, full stops, or parentheses.
+- Before declaring a change complete: `agentskills validate skills/ghostwriter` (install with `pip install skills-ref`), and `perl -CSD -ne 'print "$ARGV:$.: $_" if /\x{2014}/' $(git ls-files '*.md')` prints nothing. When agent-skills is checked out alongside, `../agent-skills/skills/agent-skills-creator/scripts/validate.sh skills/ghostwriter` is the house check.
+- `evals/evals.json` holds authored scenarios, not executed evidence. Do not claim behaviour changed from a static edit.

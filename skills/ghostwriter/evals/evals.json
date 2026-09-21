@@ -56,10 +56,10 @@
     {
       "id": 5,
       "prompt": "Write the hero headline and subhead for the Done Bear landing page. Cold Instagram traffic. It's a to-do app for people with ADHD, 2,100 paying users, syncs with Google Calendar.",
-      "expected_output": "One recommended headline and subhead resolved from brands/donebear, opening with the reader's problem, keeping 2,100 and Google Calendar, marking inferred brief fields.",
+      "expected_output": "One recommended headline and subhead written from the donebear profile, opening with the reader's problem, keeping 2,100 and Google Calendar, with inferred brief fields marked.",
       "files": [],
       "assertions": [
-        "Resolves the donebear manifest rather than a personal profile",
+        "Reads the donebear profile rather than a personal one",
         "Headline opens with the reader's problem or motivation, not the product name",
         "2,100 and Google Calendar appear and are not replaced by generic phrases",
         "Does not reuse the phrase 'to-do app for people with ADHD' verbatim",
@@ -75,7 +75,7 @@
         "Returns a usable reply without stopping or refusing",
         "Does not adopt a fictional persona, sign-off, or laugh token",
         "Offers to write a profile from pasted samples in one line",
-        "Does not instruct the user to run train-ghostwriter as the only way forward"
+        "Does not tell the user an export or training step is required"
       ]
     },
     {
@@ -88,7 +88,7 @@
         "Every excerpt is under 280 characters and contains no colleague name or PR link",
         "Provenance states it is a quick profile from 8 pasted samples and not evaluable",
         "No rule is derived from a single message",
-        "Mentions train-ghostwriter only as the export-based alternative"
+        "Does not point the user at an export or training step"
       ]
     }
   ],
@@ -109,14 +109,6 @@
       "Write my email profile from these ten emails"
     ],
     "near_miss": [
-      {
-        "prompt": "Learn my tone from these Slack exports",
-        "expected": "train-ghostwriter"
-      },
-      {
-        "prompt": "Run the blind A/B on my email profile",
-        "expected": "evaluate-ghostwriter"
-      },
       {
         "prompt": "Should the delete button be undoable or need a confirm dialog?",
         "expected": "product-design"
