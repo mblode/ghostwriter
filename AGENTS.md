@@ -17,7 +17,8 @@ Three independently installable Agent Skills. Keep the repository local-first, d
 - Keep deterministic data work in scripts and language judgment in the invoking agent.
 - Use plan, validate, execute for profile replacement and other multi-file writes.
 - Keep tone rules in private profiles. Runtime instructions must not hard-code one person's stylistic habits.
-- Persistent user data belongs under GHOSTWRITER_HOME, never inside an installed skill.
+- Persistent user data belongs under GHOSTWRITER_HOME, never inside an installed skill. That includes personal profiles at the root and company manifests under `brands/<slug>/`.
+- `copy`, `docs`, and `readme` are surfaces of the ghostwriter skill with generic defaults in their references; a matching `<platform>.md` profile is optional and wins over the defaults.
 
 ## Verification
 
@@ -27,5 +28,7 @@ Before declaring a change complete:
     uvx --from skills-ref agentskills validate skills/ghostwriter
     uvx --from skills-ref agentskills validate skills/train-ghostwriter
     uvx --from skills-ref agentskills validate skills/evaluate-ghostwriter
+
+The agent-skills house validator also runs against a skill here when that repository is checked out alongside: `../agent-skills/skills/agent-skills-creator/scripts/validate.sh skills/ghostwriter`.
 
 Model-backed smoke tests are opt-in. CI and ordinary unit tests must use fictional fixtures and stub executables.
