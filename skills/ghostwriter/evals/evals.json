@@ -65,6 +65,31 @@
         "Does not reuse the phrase 'to-do app for people with ADHD' verbatim",
         "Returns one recommended draft with inferred fields marked"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "Draft a Slack reply saying I agree and can review the PR tomorrow. (GHOSTWRITER_HOME points at an empty directory.)",
+      "expected_output": "One plain, tell-free Slack line, then a single line saying no slack profile exists yet and offering to write one from 5 to 10 pasted messages.",
+      "files": [],
+      "assertions": [
+        "Returns a usable reply without stopping or refusing",
+        "Does not adopt a fictional persona, sign-off, or laugh token",
+        "Offers to write a profile from pasted samples in one line",
+        "Does not instruct the user to run train-ghostwriter as the only way forward"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Here are eight Slack messages I wrote: [eight short messages, two containing a colleague's name and a PR link]. Write my slack profile.",
+      "expected_output": "A slack.md under the data root in the profile shape (Register, Contexts, Message shapes, Language, Anti-patterns, Redacted excerpts, Provenance), written after one path confirmation, with names and links redacted in excerpts.",
+      "files": [],
+      "assertions": [
+        "Asks once to confirm the write path before writing",
+        "Every excerpt is under 280 characters and contains no colleague name or PR link",
+        "Provenance states it is a quick profile from 8 pasted samples and not evaluable",
+        "No rule is derived from a single message",
+        "Mentions train-ghostwriter only as the export-based alternative"
+      ]
     }
   ],
   "routing": {
@@ -78,15 +103,36 @@
       "Rewrite our getting-started page, the examples are stale",
       "Write a README for the new CLI package",
       "Critique this essay draft, no rewriting yet",
-      "Turn these notes into a message to the team"
+      "Turn these notes into a message to the team",
+      "Write the PR description for this branch in my voice",
+      "Write a PRD for the reminders feature from these notes",
+      "Write my email profile from these ten emails"
     ],
     "near_miss": [
-      { "prompt": "Learn my tone from these Slack exports", "expected": "train-ghostwriter" },
-      { "prompt": "Run the blind A/B on my email profile", "expected": "evaluate-ghostwriter" },
-      { "prompt": "Should the delete button be undoable or need a confirm dialog?", "expected": "product-design" },
-      { "prompt": "Update AGENTS.md with the new test command", "expected": "agents-md" },
-      { "prompt": "Write the PR description for this branch", "expected": "pr-creator" },
-      { "prompt": "Explain what a mutex is like I'm five", "expected": "eli5" }
+      {
+        "prompt": "Learn my tone from these Slack exports",
+        "expected": "train-ghostwriter"
+      },
+      {
+        "prompt": "Run the blind A/B on my email profile",
+        "expected": "evaluate-ghostwriter"
+      },
+      {
+        "prompt": "Should the delete button be undoable or need a confirm dialog?",
+        "expected": "product-design"
+      },
+      {
+        "prompt": "Update AGENTS.md with the new test command",
+        "expected": "agents-md"
+      },
+      {
+        "prompt": "Write the PR description for this branch",
+        "expected": "pr-creator"
+      },
+      {
+        "prompt": "Explain what a mutex is like I'm five",
+        "expected": "eli5"
+      }
     ]
   }
 }

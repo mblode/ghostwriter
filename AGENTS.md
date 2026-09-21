@@ -17,6 +17,7 @@ Three independently installable Agent Skills. Keep the repository local-first, d
 - Keep deterministic data work in scripts and language judgment in the invoking agent.
 - Use plan, validate, execute for profile replacement and other multi-file writes.
 - Keep tone rules in private profiles. Runtime instructions must not hard-code one person's stylistic habits.
+- Two ways to make a profile: `ghostwriter` writes a quick one from pasted samples (no scripts, not evaluable); `train-ghostwriter` builds one from exports with a held-out split. Both write under GHOSTWRITER_HOME only.
 - Persistent user data belongs under GHOSTWRITER_HOME, never inside an installed skill. That includes personal profiles at the root and company manifests under `brands/<slug>/`.
 - `copy`, `docs`, and `readme` are surfaces of the ghostwriter skill with generic defaults in their references; a matching `<platform>.md` profile is optional and wins over the defaults.
 

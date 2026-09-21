@@ -7,7 +7,7 @@ description: Trains private, platform-specific tone profiles from local writing 
 
 Turn explicitly selected local writing into a private profile and uncontaminated evaluation set.
 
-- **IS:** the only ghostwriter workflow that creates corpus files, profiles, cases, or references.
+- **IS:** the export-based, evaluable path: it creates corpus files, held-out cases, and references, and trains profiles from a deterministic split. (`ghostwriter` can write a quick profile from pasted samples; this workflow is the one that produces something `evaluate-ghostwriter` can score.)
 - **IS NOT:** a live connector, scraper, drafting skill, evaluator, continuous learner, or hosted data service. Use `ghostwriter` to draft and `evaluate-ghostwriter` to evaluate.
 
 ## Reference files
